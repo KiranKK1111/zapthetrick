@@ -6,7 +6,12 @@
 set -euo pipefail
 
 VENV="${VENV:-/opt/venv}"
-PGDATA="${PGDATA:-/workspace/pgdata}"
+# Postgres data dir on the pod's LOCAL disk, NOT /workspace. RunPod's /workspace
+# is a network volume (MooseFS) that can't honor chown/0700 perms, and Postgres
+# refuses to init there ("data directory has invalid permissions"). Local disk
+# supports proper perms. Trade-off: the DB is wiped on a full pod stop/terminate
+# (models/config on /workspace still persist). Override with PGDATA to relocate.
+PGDATA="${PGDATA:-/var/lib/pgdata}"
 PGPASS="${POSTGRES_PASSWORD:-zaptrick}"
 APP_PORT="${APP_PORT:-8888}"
 BRANCH="${BRANCH:-main}"

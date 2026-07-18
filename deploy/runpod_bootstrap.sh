@@ -20,7 +20,10 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/workspace/zapthetrick_be}"
 VENV_DIR="${VENV_DIR:-/workspace/venv}"
-PGDATA="${PGDATA:-/workspace/pgdata}"
+# Local disk, NOT /workspace: RunPod's network volume (MooseFS) can't honor
+# Postgres's required chown/0700 perms ("data directory has invalid
+# permissions"). Local disk works; DB is wiped on full pod stop (models persist).
+PGDATA="${PGDATA:-/var/lib/pgdata}"
 HF_HOME="${HF_HOME:-/workspace/hf_cache}"
 PGPASS="${POSTGRES_PASSWORD:-zaptrick}"
 APP_PORT="${APP_PORT:-8888}"
