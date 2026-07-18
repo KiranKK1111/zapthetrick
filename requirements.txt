@@ -1,0 +1,92 @@
+# ZapTheTrick AI backend dependencies.
+# Install with:  pip install -r requirements.txt
+#
+# Pinned to versions known to work together as of early 2026.
+
+# ---- Core (Phase 1) ----------------------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+# uvloop: faster asyncio event loop for the SSE/token streaming hot path on the
+# Linux VPS. Unix-only (won't build on Windows dev boxes), so it's marker-gated.
+# Enable in production with:  uvicorn app.main:app --loop uvloop --http httptools
+uvloop==0.21.0 ; sys_platform != 'win32'
+sqlalchemy==2.0.36
+asyncpg==0.30.0                     # Postgres driver (DataBaseArchitecture.md)
+alembic==1.14.0                     # schema migrations
+httpx==0.28.1
+pydantic==2.10.4
+pyyaml==6.0.2
+cryptography==48.0.0                # AES-256-GCM at-rest encryption for LLM provider API keys
+
+# ---- Storage stack (DataBaseArchitecture.md) ---------------------------
+# Vectors live in Postgres via pgvector — no separate vector-DB client.
+redis==5.2.1                        # speaks DragonflyDB too via the same wire protocol
+# minio is optional (alternative blob backend) — install only when
+# you flip cfg.database.storage.blobs_backend to "minio"
+
+# Resume Q&A: multipart form parsing + PDF/DOCX extraction.
+python-multipart==0.0.20
+pdfplumber==0.11.4
+python-docx==1.1.2
+PyMuPDF==1.25.1                     # PDF fallback when pdfplumber chokes
+openpyxl==3.1.5                     # .xlsx read (attachments) + write (export)
+py7zr==0.22.0                      # .7z archive read (chat attachments)
+rarfile==4.2                       # .rar archive read (uses bundled tools/UnRAR.exe)
+msoffcrypto-tool==5.4.2            # decrypt password-protected .docx/.xlsx
+lz4==4.3.3                         # .lz4 decompress (.br/brotli comes via py7zr)
+fpdf2==2.8.1                        # Markdown -> PDF for document export
+python-pptx==1.0.2                  # Markdown -> PowerPoint (.pptx) export (P2-8)
+
+# ---- RAG (Phase 2) -----------------------------------------------------
+# Native deps; first install pulls a few hundred MB of torch + transformers.
+sentence-transformers==3.3.1        # embeddings + cross-encoder reranker
+chromadb==0.6.3                     # local vector store
+rank-bm25==0.2.2                    # keyword retrieval, pure Python
+
+# ---- WebSocket support for live audio (Phase 4-5) ----------------------
+websockets==14.1
+
+# ---- STT (Phase 4) -----------------------------------------------------
+# Lazy-imported in app/stt/whisper_stt.py — only loaded when STT is used.
+faster-whisper==1.1.0
+numpy==2.2.0
+# Local STT chain (no API engines): Parakeet v3 primary + Qwen3-ASR fallback.
+# qwen-asr pulls gradio for its demo UI, which force-upgrades fastapi past
+# our pin — install with `pip install qwen-asr && pip uninstall -y gradio
+# gradio-client hf-gradio && pip install fastapi==0.115.6 starlette<0.42`
+# (core inference does not import gradio). For GPU: torch cu128 build.
+qwen-asr==0.0.6
+onnx-asr==0.11.0
+# GPU Parakeet (~50-120ms/utterance vs seconds on CPU). IMPORTANT: the
+# default PyPI onnxruntime-gpu 1.27 links CUDA *13* (no Windows pip wheels
+# for its DLLs); install the CUDA-12 build instead, matching torch cu12x:
+#   pip uninstall -y onnxruntime && \
+#   pip install onnxruntime-gpu --index-url \
+#     https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+#   pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-cudnn-cu12
+# Fail-open: without a GPU the code silently uses the int8 CPU model.
+
+# ---- Audio capture + VAD (Phase 4-5) -----------------------------------
+# sounddevice covers mic on all platforms; pyaudiowpatch is needed for
+# Windows system-audio loopback. Both are lazy-imported.
+sounddevice==0.5.1 ; sys_platform != 'win32'
+PyAudioWPatch==0.2.12.8 ; sys_platform == 'win32'
+silero-vad==5.1.2
+
+# ---- Code solver / vision (Phase 6) ------------------------------------
+Pillow==11.0.0                      # image bytes -> PIL.Image for vision LLMs
+
+# ---- Tools (Phase 6+) --------------------------------------------------
+duckduckgo-search==7.1.1            # free web search tool
+
+# ---- Code knowledge graph (project zip → graph, like codegraph) --------
+# tree-sitter parses 100+ languages into ASTs; the language-pack ships prebuilt
+# grammar wheels so no compiler is needed. Lazy-imported in app/codegraph/*.
+tree-sitter==0.25.2
+tree-sitter-language-pack==1.8.1
+
+# ---- Dev / test --------------------------------------------------------
+# Test runner for tests/. Installed in the same venv so the suite (which imports
+# the app — asyncpg, the document parser, …) runs in the REAL environment:
+#   pip install -r requirements.txt   then   pytest -q
+pytest==8.3.4

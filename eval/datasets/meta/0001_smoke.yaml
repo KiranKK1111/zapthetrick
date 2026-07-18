@@ -1,0 +1,14 @@
+case_id: meta-0001
+category: meta
+sut: chat
+input:
+  question: "Reply with the single word: ok"
+expected:
+  contains:
+    - ok
+  rubric_threshold: 0.6
+
+# TODO: Architecture.md commits to 200+ cases. The current seed of
+# ~5 covers the most-likely-to-regress paths; growing the corpus is
+# the natural follow-up. Adding cases requires no code change — drop
+# more YAML files under eval/datasets/{category}/.

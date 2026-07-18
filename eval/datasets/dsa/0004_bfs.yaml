@@ -1,0 +1,12 @@
+case_id: dsa-0004
+category: dsa
+sut: dsa
+input:
+  question: |
+    Given a graph as an adjacency list, return the shortest path
+    length from node s to node t. Edges are unweighted.
+expected:
+  contains:
+    - BFS
+    - queue
+  rubric_threshold: 0.55

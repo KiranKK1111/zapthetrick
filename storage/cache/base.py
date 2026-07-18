@@ -1,0 +1,23 @@
+"""Cache + pub/sub interface.
+
+Architecture.md §3 caching targets (>99% on token counts, >80% on
+embeddings, >40% on RAG results) all run through this interface. Keys
+are flat strings — convention is `{namespace}:{hash_or_id}`.
+"""
+from __future__ import annotations
+
+from typing import AsyncIterator, Protocol
+
+
+class Cache(Protocol):
+    # ---- TTL key/value -----------------------------------------------
+    async def get(self, key: str) -> str | None: ...
+    async def set(self, key: str, value: str, *, ttl_seconds: int | None = None) -> None: ...
+    async def delete(self, key: str) -> None: ...
+    async def incr(self, key: str, *, ttl_seconds: int | None = None) -> int: ...
+
+    # ---- pub / sub ---------------------------------------------------
+    async def publish(self, channel: str, message: str) -> None: ...
+    async def subscribe(self, channel: str) -> AsyncIterator[str]: ...
+
+    async def close(self) -> None: ...

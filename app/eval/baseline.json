@@ -1,0 +1,66 @@
+{
+  "false_ask_rate": 0.0,
+  "misroute_rate": 0.0,
+  "overall": {
+    "pass_rate": 1.0,
+    "passed": 17,
+    "total": 17
+  },
+  "per_category": {
+    "ambiguous": {
+      "pass_rate": 1.0,
+      "passed": 1,
+      "total": 1
+    },
+    "clarification_needed": {
+      "pass_rate": 1.0,
+      "passed": 2,
+      "total": 2
+    },
+    "comparison": {
+      "pass_rate": 1.0,
+      "passed": 1,
+      "total": 1
+    },
+    "context_selection": {
+      "pass_rate": 1.0,
+      "passed": 1,
+      "total": 1
+    },
+    "continuation": {
+      "pass_rate": 1.0,
+      "passed": 1,
+      "total": 1
+    },
+    "correction": {
+      "pass_rate": 1.0,
+      "passed": 1,
+      "total": 1
+    },
+    "false_ask": {
+      "pass_rate": 1.0,
+      "passed": 2,
+      "total": 2
+    },
+    "follow_up": {
+      "pass_rate": 1.0,
+      "passed": 2,
+      "total": 2
+    },
+    "multi_topic": {
+      "pass_rate": 1.0,
+      "passed": 1,
+      "total": 1
+    },
+    "new_topic": {
+      "pass_rate": 1.0,
+      "passed": 1,
+      "total": 1
+    },
+    "routing": {
+      "pass_rate": 1.0,
+      "passed": 4,
+      "total": 4
+    }
+  }
+}

@@ -1,0 +1,94 @@
+{"prompt": "what is a hash map?", "expected": "proceed", "source": "doc:knowledge", "note": "definitional question answers directly"}
+{"prompt": "explain this code", "expected": "proceed", "has_artifact": true, "source": "doc:explain-attached", "note": "artifact present, analyze directly"}
+{"prompt": "how does binary search work?", "expected": "proceed", "source": "doc:knowledge"}
+{"prompt": "compare kafka and rabbitmq", "expected": "proceed", "source": "doc:compare-technologies", "note": "no clarification needed"}
+{"prompt": "compare postgresql and mongodb for a chat app", "expected": "proceed", "source": "doc:compare-technologies"}
+{"prompt": "what's the difference between tcp and udp", "expected": "proceed", "source": "doc:knowledge"}
+{"prompt": "hey there", "expected": "proceed", "source": "doc:chitchat"}
+{"prompt": "good morning!", "expected": "proceed", "source": "doc:chitchat"}
+{"prompt": "write a login api", "expected": "clarify", "source": "doc:code-without-language", "note": "language materially changes the deliverable"}
+{"prompt": "write a rest api", "expected": "clarify", "source": "doc:code-without-language"}
+{"prompt": "write a login api in python", "expected": "proceed", "source": "doc:code-with-language"}
+{"prompt": "write a binary search function in java", "expected": "proceed", "source": "doc:code-with-language"}
+{"prompt": "write a login api in spring boot", "expected": "proceed", "source": "doc:framework-implies-language", "note": "framework implies the language"}
+{"prompt": "create a fastapi endpoint for user signup", "expected": "proceed", "source": "doc:code-with-language"}
+{"prompt": "build me an app", "expected": "clarify", "source": "doc:project-without-stack", "note": "no stack named"}
+{"prompt": "build a crm", "expected": "clarify", "source": "doc:project-without-stack"}
+{"prompt": "build a todo app in react", "expected": "proceed", "source": "doc:project-with-stack"}
+{"prompt": "build a web app in django", "expected": "proceed", "source": "doc:project-with-stack"}
+{"prompt": "document this", "expected": "clarify", "source": "doc:generic-document", "note": "format/scope genuinely ambiguous"}
+{"prompt": "compress this project", "expected": "clarify", "source": "doc:archive-without-format", "note": "which archive format?"}
+{"prompt": "zip up the whole project as a zip file", "expected": "proceed", "source": "doc:archive-with-format"}
+{"prompt": "review this code", "expected": "proceed", "has_artifact": true, "source": "doc:review-code", "note": "review directly"}
+{"prompt": "fix the bug in this function", "expected": "proceed", "has_artifact": true, "source": "doc:fix-pasted-code"}
+{"prompt": "refactor this class to be more readable", "expected": "proceed", "has_artifact": true, "source": "doc:refactor-code"}
+{"prompt": "analyze my code", "expected": "proceed", "has_artifact": true, "source": "doc:attachment-understanding", "note": "never ask to attach what was attached"}
+{"prompt": "add authentication", "expected": "proceed", "has_artifact": true, "attachment_slots": {"language": "java", "framework": "spring boot"}, "source": "doc:infer-from-uploaded-project", "note": "stack detected inside upload satisfies required slots"}
+{"prompt": "add a rest endpoint for orders", "expected": "defer", "source": "doc:code-without-language", "note": "deterministic layer can't classify confidently; the LLM gate decides (it may still clarify)"}
+{"prompt": "add a rest endpoint for orders", "expected": "proceed", "attachment_slots": {"language": "python", "framework": "fastapi"}, "has_artifact": true, "source": "doc:infer-from-uploaded-project"}
+{"prompt": "generate unit tests for this service", "expected": "proceed", "has_artifact": true, "source": "doc:test-generation", "note": "generate tests based on code"}
+{"prompt": "summarize this document", "expected": "proceed", "has_artifact": true, "source": "doc:summarize-attached"}
+{"prompt": "what does this error mean: NullPointerException at line 42", "expected": "proceed", "source": "doc:diagnose-error"}
+{"prompt": "why is my query slow: SELECT * FROM users WHERE email LIKE '%x%'", "expected": "proceed", "source": "doc:optimize-query"}
+{"prompt": "design a payment system architecture", "expected": "proceed", "source": "doc:design-architecture", "note": "ask scale only if necessary - proceed with assumptions"}
+{"prompt": "asdf qwerty zxcv", "expected": "defer", "source": "doc:unclassifiable", "note": "unknown intent defers to the LLM gate"}
+{"prompt": "make it better", "expected": "clarify", "source": "doc:uncertain-intent", "note": "doc: 'Can you make it better?' with no referent is the canonical uncertain-intent clarify"}
+{"prompt": "translate this to french: hello world", "expected": "proceed", "source": "doc:translate-directly"}
+{"prompt": "improve the wording of this paragraph", "expected": "proceed", "has_artifact": true, "source": "doc:improve-writing"}
+{"prompt": "explain the difference between rest and graphql", "expected": "proceed", "source": "doc:knowledge"}
+{"prompt": "write unit tests in pytest for a fibonacci function", "expected": "proceed", "source": "doc:test-with-language"}
+{"prompt": "convert this python code to java", "expected": "proceed", "has_artifact": true, "source": "doc:convert-between-languages", "note": "languages already implied"}
+{"prompt": "brainstorm names for a coffee shop app", "expected": "proceed", "source": "doc:brainstorm"}
+{"prompt": "give me the archive", "expected": "clarify", "source": "doc:archive-without-format"}
+{"prompt": "what is a zip code", "expected": "proceed", "source": "doc:definitional-not-archive", "note": "knowledge, not an archive request"}
+{"prompt": "how should i structure a microservices project", "expected": "proceed", "source": "doc:design-question"}
+{"prompt": "write sql to find duplicate emails in a users table", "expected": "proceed", "source": "doc:sql-ansi-default", "note": "ANSI SQL default, no dialect ask"}
+{"prompt": "generate a readme for this project", "expected": "proceed", "has_artifact": true, "source": "doc:readme-obvious-format", "note": "markdown is obvious"}
+{"prompt": "convert this python code to javascript", "expected": "proceed", "has_artifact": true, "source": "doc:convert-between-languages"}
+{"prompt": "migrate this project from java 8 to java 21", "expected": "proceed", "has_artifact": true, "source": "doc:migrate-technology"}
+{"prompt": "upgrade this app from spring boot 2 to spring boot 3", "expected": "proceed", "has_artifact": true, "source": "doc:upgrade-framework"}
+{"prompt": "convert this express api to fastapi", "expected": "proceed", "has_artifact": true, "source": "doc:convert-backend-framework"}
+{"prompt": "optimize this sql query: SELECT * FROM orders WHERE status = 'open'", "expected": "proceed", "source": "doc:paste-sql", "note": "inline SQL is the artifact"}
+{"prompt": "explain this regex: ^[0-9]{3}-[0-9]{2}$", "expected": "proceed", "source": "doc:paste-regex"}
+{"prompt": "is this json valid: {\"a\": 1, \"b\": [2]}", "expected": "proceed", "source": "doc:paste-json"}
+{"prompt": "explain the settings in this nginx config", "expected": "proceed", "has_artifact": true, "source": "doc:paste-config"}
+{"prompt": "deploy my backend", "expected": "clarify", "source": "doc:deploy-needs-target", "note": "cloud/provider/environment unknown"}
+{"prompt": "generate a dockerfile for this project", "expected": "proceed", "has_artifact": true, "attachment_slots": {"language": "python", "framework": "fastapi"}, "source": "doc:dockerfile-detect-stack"}
+{"prompt": "create a presentation", "expected": "clarify", "source": "doc:presentation-without-topic"}
+{"prompt": "create a presentation about microservices architecture patterns", "expected": "proceed", "source": "doc:presentation-with-topic"}
+{"prompt": "create a spreadsheet", "expected": "clarify", "source": "doc:spreadsheet-without-purpose"}
+{"prompt": "create a spreadsheet to track monthly team expenses", "expected": "proceed", "source": "doc:spreadsheet-with-purpose"}
+{"prompt": "create a diagram", "expected": "clarify", "source": "doc:diagram-without-subject"}
+{"prompt": "create a sequence diagram for the login flow", "expected": "proceed", "source": "doc:diagram-with-subject"}
+{"prompt": "generate an er diagram from this schema", "expected": "proceed", "has_artifact": true, "source": "doc:er-from-schema"}
+{"prompt": "create a resume", "expected": "clarify", "source": "doc:resume-from-scratch", "note": "need education/experience"}
+{"prompt": "improve my resume", "expected": "proceed", "has_artifact": true, "source": "doc:resume-improvement"}
+{"prompt": "write a cover letter for this job description", "expected": "proceed", "has_artifact": true, "source": "doc:cover-letter-with-jd"}
+{"prompt": "write an email", "expected": "clarify", "source": "doc:email-without-context"}
+{"prompt": "write an email to my manager requesting friday off", "expected": "proceed", "source": "doc:email-with-context"}
+{"prompt": "translate 'bonjour le monde' to english", "expected": "proceed", "source": "doc:translate-directly"}
+{"prompt": "rewrite this paragraph to sound more professional", "expected": "proceed", "has_artifact": true, "source": "doc:change-tone"}
+{"prompt": "summarize this meeting transcript", "expected": "proceed", "has_artifact": true, "source": "doc:meeting-notes"}
+{"prompt": "extract action items from this transcript", "expected": "proceed", "has_artifact": true, "source": "doc:action-items"}
+{"prompt": "generate release notes from these commits", "expected": "proceed", "has_artifact": true, "source": "doc:release-notes"}
+{"prompt": "generate a changelog from the git history", "expected": "proceed", "has_artifact": true, "source": "doc:changelog"}
+{"prompt": "find duplicate code in this project", "expected": "proceed", "has_artifact": true, "source": "doc:duplicate-code"}
+{"prompt": "detect dead code in this repository", "expected": "proceed", "has_artifact": true, "source": "doc:dead-code"}
+{"prompt": "profile the memory usage of this script", "expected": "proceed", "has_artifact": true, "source": "doc:profile"}
+{"prompt": "benchmark this function against the naive version", "expected": "proceed", "has_artifact": true, "source": "doc:benchmark"}
+{"prompt": "generate mock data for a users table with name and email columns", "expected": "proceed", "source": "doc:mock-data"}
+{"prompt": "review this pull request for issues", "expected": "proceed", "has_artifact": true, "source": "doc:review-pr"}
+{"prompt": "audit this repository for security vulnerabilities", "expected": "proceed", "has_artifact": true, "source": "doc:security-audit"}
+{"prompt": "surprise me with something interesting about databases", "expected": "proceed", "source": "doc:creative-freedom", "note": "avoid over-clarifying"}
+{"prompt": "what is the best practice for error handling in rest apis", "expected": "proceed", "source": "doc:best-practice"}
+{"prompt": "fix everything", "expected": "clarify", "source": "doc:fix-everything-no-artifact", "note": "nothing to fix is attached"}
+{"prompt": "fix everything", "expected": "proceed", "has_artifact": true, "source": "doc:fix-everything-with-artifact", "note": "categorize and fix directly"}
+{"prompt": "continue", "expected": "proceed", "recent": "assistant was generating a project plan", "source": "doc:continue-previous"}
+{"prompt": "make it shorter", "expected": "proceed", "recent": "assistant wrote a long essay about kafka", "source": "doc:shorten-existing", "note": "prior content is the referent"}
+{"prompt": "generate interview questions for a senior java developer", "expected": "proceed", "source": "doc:interview-questions-with-level"}
+{"prompt": "evaluate this interview answer for the tell-me-about-yourself question", "expected": "proceed", "has_artifact": true, "source": "doc:evaluate-answer"}
+{"prompt": "compare these two api specs", "expected": "proceed", "has_artifact": true, "source": "doc:compare-two-apis"}
+{"prompt": "explain the differences between these two screenshots", "expected": "proceed", "has_artifact": true, "source": "doc:compare-images"}
+{"prompt": "give me a program for finding nth max number from an array", "expected": "clarify", "source": "user-report-2026-07-08", "note": "subject present, language missing - the empty-target suppression must NOT swallow the language card"}
+{"prompt": "how does binary search work", "expected": "proceed", "source": "semantic-bench", "note": "question-form knowledge; semantic topic overlap with coding exemplars must not trigger a language ask"}
+{"prompt": "give me a program", "expected": "clarify", "source": "doc:empty-target-code", "note": "no subject at all - natural what-should-it-do ask"}

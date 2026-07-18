@@ -1,0 +1,50 @@
+{
+  "false_answer_rate": 0.0,
+  "overall": {
+    "pass_rate": 1.0,
+    "passed": 19,
+    "total": 19
+  },
+  "per_category": {
+    "boundary": {
+      "pass_rate": 1.0,
+      "passed": 1,
+      "total": 1
+    },
+    "false_answer": {
+      "pass_rate": 1.0,
+      "passed": 3,
+      "total": 3
+    },
+    "multi_question": {
+      "pass_rate": 1.0,
+      "passed": 2,
+      "total": 2
+    },
+    "phase": {
+      "pass_rate": 1.0,
+      "passed": 3,
+      "total": 3
+    },
+    "question_detection": {
+      "pass_rate": 1.0,
+      "passed": 3,
+      "total": 3
+    },
+    "satisfaction": {
+      "pass_rate": 1.0,
+      "passed": 2,
+      "total": 2
+    },
+    "strategy": {
+      "pass_rate": 1.0,
+      "passed": 3,
+      "total": 3
+    },
+    "topic_switch": {
+      "pass_rate": 1.0,
+      "passed": 2,
+      "total": 2
+    }
+  }
+}

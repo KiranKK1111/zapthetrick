@@ -1,0 +1,14 @@
+case_id: dsa-0003
+category: dsa
+sut: dsa
+input:
+  question: |
+    Design an LRU cache supporting get(key) and put(key, value) in
+    O(1) time on average. Constraint: capacity is given at construction.
+expected:
+  contains:
+    - O(1)
+    - linked list
+  omits:
+    - O(n)
+  rubric_threshold: 0.55

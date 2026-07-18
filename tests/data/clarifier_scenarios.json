@@ -1,0 +1,1107 @@
+[
+ {
+  "id": 1,
+  "family": "Code Generation",
+  "prompt": "Write a program to reverse a string.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which programming language would you like?"
+  ]
+ },
+ {
+  "id": 2,
+  "family": "Code Generation",
+  "prompt": "Write a Java program to reverse a string.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 3,
+  "family": "Code Generation",
+  "prompt": "Write a REST API.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which language/framework would you like to use? (Spring Boot, Express.js, FastAPI, ASP.NET, etc.)"
+  ]
+ },
+ {
+  "id": 4,
+  "family": "Code Generation",
+  "prompt": "Write a REST API using Spring Boot.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 5,
+  "family": "Code Generation",
+  "prompt": "Build a login system.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Web or mobile?",
+   "Preferred tech stack?",
+   "Database?"
+  ]
+ },
+ {
+  "id": 6,
+  "family": "Code Generation",
+  "prompt": "Build a login system using Spring Boot + MySQL.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 7,
+  "family": "Project Generation",
+  "prompt": "Build an e-commerce application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Frontend technology?",
+   "Backend technology?",
+   "Database?",
+   "Authentication method?"
+  ]
+ },
+ {
+  "id": 8,
+  "family": "Project Generation",
+  "prompt": "Build an e-commerce application using React, Spring Boot and PostgreSQL.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 9,
+  "family": "Project Generation",
+  "prompt": "Create a microservice architecture.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Preferred language?",
+   "Deployment target?",
+   "Messaging technology?"
+  ]
+ },
+ {
+  "id": 10,
+  "family": "Project Generation",
+  "prompt": "Create a microservice architecture using Java, Kafka and Kubernetes.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 11,
+  "family": "Bug Fixing",
+  "prompt": "Fix my code.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please paste the code or attach the file."
+  ]
+ },
+ {
+  "id": 13,
+  "family": "Bug Fixing",
+  "prompt": "My API isn't working.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Error message?",
+   "Logs?",
+   "Code snippet?"
+  ]
+ },
+ {
+  "id": 14,
+  "family": "Bug Fixing",
+  "prompt": "My Spring Boot API returns 500. Here is the stack trace.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 15,
+  "family": "Code Explanation",
+  "prompt": "Explain this.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 16,
+  "family": "Code Explanation",
+  "prompt": "Explain my code.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please provide the code."
+  ]
+ },
+ {
+  "id": 17,
+  "family": "Refactoring",
+  "prompt": "Refactor this code.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 19,
+  "family": "Unit Testing",
+  "prompt": "Write unit tests.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please provide the code."
+  ]
+ },
+ {
+  "id": 20,
+  "family": "Unit Testing",
+  "prompt": "Write JUnit tests for this Spring service.",
+  "should_clarify": false,
+  "has_artifact": true,
+  "expected_questions": []
+ },
+ {
+  "id": 21,
+  "family": "Database Design",
+  "prompt": "Design a database.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "What application/domain is this for?"
+  ]
+ },
+ {
+  "id": 22,
+  "family": "Database Design",
+  "prompt": "Design a database for a hospital management system.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 23,
+  "family": "Database Design",
+  "prompt": "Write a query.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which database? (MySQL, PostgreSQL, Oracle, SQL Server)"
+  ]
+ },
+ {
+  "id": 24,
+  "family": "Database Design",
+  "prompt": "Write a PostgreSQL query.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 25,
+  "family": "System Design",
+  "prompt": "Design Netflix.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "High-level architecture or detailed implementation?"
+  ]
+ },
+ {
+  "id": 26,
+  "family": "System Design",
+  "prompt": "Design Netflix at system-design interview level.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 27,
+  "family": "System Design",
+  "prompt": "Design a chat application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Scale?",
+   "Real-time requirements?",
+   "Target users?"
+  ]
+ },
+ {
+  "id": 28,
+  "family": "Screenshot Analysis",
+  "prompt": "What's wrong here?",
+  "should_clarify": false,
+  "has_artifact": true,
+  "expected_questions": []
+ },
+ {
+  "id": 29,
+  "family": "Screenshot Analysis",
+  "prompt": "Analyze the screenshot.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please upload the screenshot."
+  ]
+ },
+ {
+  "id": 30,
+  "family": "Log Analysis",
+  "prompt": "Analyze this error.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 32,
+  "family": "Architecture Review",
+  "prompt": "Review my architecture.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please share the architecture diagram."
+  ]
+ },
+ {
+  "id": 34,
+  "family": "Documentation",
+  "prompt": "Create documentation.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which document? (PRD, BRD, SRS, API Doc, Design Doc, ADR)"
+  ]
+ },
+ {
+  "id": 35,
+  "family": "Documentation",
+  "prompt": "Create an API design document.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 36,
+  "family": "Documentation",
+  "prompt": "Create a PRD for an interview assistant.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 37,
+  "family": "Framework Selection",
+  "prompt": "Which framework should I use?",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "What type of application are you building?"
+  ]
+ },
+ {
+  "id": 38,
+  "family": "Framework Selection",
+  "prompt": "Which Java framework should I use for microservices?",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 39,
+  "family": "File-Based Tasks",
+  "prompt": "Review my project.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 41,
+  "family": "Migration Tasks",
+  "prompt": "Migrate my application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Source technology?",
+   "Target technology?"
+  ]
+ },
+ {
+  "id": 42,
+  "family": "Migration Tasks",
+  "prompt": "Migrate Spring MVC to Spring Boot.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 43,
+  "family": "API Development",
+  "prompt": "Create an API.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "REST, GraphQL, or gRPC?"
+  ]
+ },
+ {
+  "id": 44,
+  "family": "API Development",
+  "prompt": "Create a GraphQL API using Node.js.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 45,
+  "family": "API Development",
+  "prompt": "Secure my API.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "JWT, OAuth2, API Key, Session-based, or another authentication method?"
+  ]
+ },
+ {
+  "id": 46,
+  "family": "Frontend Development",
+  "prompt": "Build a UI for a dashboard.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "React, Angular, Vue, Flutter Web, or another framework?"
+  ]
+ },
+ {
+  "id": 47,
+  "family": "Frontend Development",
+  "prompt": "Build a React dashboard.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 48,
+  "family": "Frontend Development",
+  "prompt": "Create a responsive UI.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 49,
+  "family": "Mobile Development",
+  "prompt": "Build a mobile application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Android, iOS, Flutter, React Native, or Kotlin Multiplatform?"
+  ]
+ },
+ {
+  "id": 50,
+  "family": "Mobile Development",
+  "prompt": "Build a Flutter application.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 51,
+  "family": "DevOps",
+  "prompt": "Create a deployment pipeline.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "GitHub Actions, GitLab CI, Jenkins, Azure DevOps, or another CI/CD platform?"
+  ]
+ },
+ {
+  "id": 52,
+  "family": "DevOps",
+  "prompt": "Create a GitHub Actions pipeline.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 53,
+  "family": "DevOps",
+  "prompt": "Containerize my application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "What application stack are you using?"
+  ]
+ },
+ {
+  "id": 54,
+  "family": "Cloud",
+  "prompt": "Deploy my application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "AWS, Azure, GCP, Kubernetes, VPS, or another environment?"
+  ]
+ },
+ {
+  "id": 55,
+  "family": "Cloud",
+  "prompt": "Deploy Spring Boot on AWS ECS.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 56,
+  "family": "Security",
+  "prompt": "Perform a security review.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please provide the codebase, repository, or architecture diagram."
+  ]
+ },
+ {
+  "id": 58,
+  "family": "Security",
+  "prompt": "Implement authentication.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "What platform and authentication requirements do you have?"
+  ]
+ },
+ {
+  "id": 59,
+  "family": "Performance Optimization",
+  "prompt": "Optimize my application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which part is slow? Backend, frontend, database, network, or startup time?"
+  ]
+ },
+ {
+  "id": 60,
+  "family": "Performance Optimization",
+  "prompt": "Optimize this SQL query.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 61,
+  "family": "Repository Analysis",
+  "prompt": "Analyze my project.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please upload the repository or relevant files."
+  ]
+ },
+ {
+  "id": 63,
+  "family": "Code Review",
+  "prompt": "Review my code.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 65,
+  "family": "Design Patterns",
+  "prompt": "Apply a design pattern.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which problem are you trying to solve?"
+  ]
+ },
+ {
+  "id": 66,
+  "family": "Design Patterns",
+  "prompt": "Apply a Factory Pattern to this code.",
+  "should_clarify": false,
+  "has_artifact": true,
+  "expected_questions": []
+ },
+ {
+  "id": 67,
+  "family": "Legacy Modernization",
+  "prompt": "Modernize this application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "What is the current technology stack?"
+  ]
+ },
+ {
+  "id": 68,
+  "family": "Legacy Modernization",
+  "prompt": "Modernize a Java 8 Spring MVC application to Spring Boot 3.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 69,
+  "family": "Testing",
+  "prompt": "Create automated tests.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Unit, integration, API, UI, or end-to-end tests?"
+  ]
+ },
+ {
+  "id": 70,
+  "family": "Testing",
+  "prompt": "Create JUnit integration tests.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 71,
+  "family": "Interview Preparation",
+  "prompt": "Prepare me for interviews.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which role and experience level?"
+  ]
+ },
+ {
+  "id": 72,
+  "family": "Interview Preparation",
+  "prompt": "Prepare me for a Senior Java Developer interview.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 73,
+  "family": "Architecture Generation",
+  "prompt": "Design an architecture.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "What system are we designing?"
+  ]
+ },
+ {
+  "id": 74,
+  "family": "Architecture Generation",
+  "prompt": "Design an architecture for an AI interview assistant.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 75,
+  "family": "Data Engineering",
+  "prompt": "Build a data pipeline.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Batch or real-time?"
+  ]
+ },
+ {
+  "id": 76,
+  "family": "Data Engineering",
+  "prompt": "Build a Kafka-based real-time data pipeline.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 77,
+  "family": "AI/LLM Development",
+  "prompt": "Build an AI assistant.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "LLM provider?",
+   "Memory requirements?",
+   "RAG required?",
+   "Voice support?",
+   "Tool calling required?"
+  ]
+ },
+ {
+  "id": 78,
+  "family": "AI/LLM Development",
+  "prompt": "Build an AI assistant using Llama + RAG + PostgreSQL.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 79,
+  "family": "Multi-File Tasks",
+  "prompt": "Modify this project.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please upload the project files."
+  ]
+ },
+ {
+  "id": 81,
+  "family": "Documentation Extraction",
+  "prompt": "Generate documentation from my code.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please provide the codebase."
+  ]
+ },
+ {
+  "id": 83,
+  "family": "Reverse Engineering",
+  "prompt": "Explain this architecture.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please upload the diagram."
+  ]
+ },
+ {
+  "id": 85,
+  "family": "Estimation Tasks",
+  "prompt": "Estimate effort.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please describe the project scope."
+  ]
+ },
+ {
+  "id": 87,
+  "family": "Requirements Engineering",
+  "prompt": "Build a CRM system.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Who are the users?",
+   "What are the major workflows?",
+   "Web, mobile, or both?"
+  ]
+ },
+ {
+  "id": 88,
+  "family": "Requirements Engineering",
+  "prompt": "Generate requirements.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "For what system?"
+  ]
+ },
+ {
+  "id": 89,
+  "family": "Requirements Engineering",
+  "prompt": "Generate requirements for an AI Interview Assistant.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 90,
+  "family": "User Story Generation",
+  "prompt": "Create user stories.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "For which product or feature?"
+  ]
+ },
+ {
+  "id": 91,
+  "family": "User Story Generation",
+  "prompt": "Create user stories for a banking application.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 92,
+  "family": "Acceptance Criteria",
+  "prompt": "Generate acceptance criteria.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which feature?"
+  ]
+ },
+ {
+  "id": 93,
+  "family": "Acceptance Criteria",
+  "prompt": "Generate acceptance criteria for login.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 94,
+  "family": "UML & Diagrams",
+  "prompt": "Generate UML.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Class diagram, sequence diagram, activity diagram, or use-case diagram?"
+  ]
+ },
+ {
+  "id": 95,
+  "family": "UML & Diagrams",
+  "prompt": "Generate sequence diagram for checkout flow.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 96,
+  "family": "Event-Driven Systems",
+  "prompt": "Design an event-driven architecture.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Kafka, RabbitMQ, Pulsar, or another event platform?"
+  ]
+ },
+ {
+  "id": 97,
+  "family": "Event-Driven Systems",
+  "prompt": "Design a Kafka event-driven architecture.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 98,
+  "family": "Distributed Systems",
+  "prompt": "Design a distributed system.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Scale requirements?"
+  ]
+ },
+ {
+  "id": 99,
+  "family": "Distributed Systems",
+  "prompt": "Design a distributed chat system supporting 50M users.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 100,
+  "family": "Scalability Reviews",
+  "prompt": "Review scalability.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please provide architecture or traffic estimates."
+  ]
+ },
+ {
+  "id": 101,
+  "family": "Capacity Planning",
+  "prompt": "Estimate infrastructure.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "User count?",
+   "Traffic volume?",
+   "Peak load?"
+  ]
+ },
+ {
+  "id": 102,
+  "family": "Cost Optimization",
+  "prompt": "Reduce cloud cost.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which cloud provider and current architecture?"
+  ]
+ },
+ {
+  "id": 103,
+  "family": "Observability",
+  "prompt": "Add monitoring.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which stack? Prometheus, Grafana, Datadog, New Relic?"
+  ]
+ },
+ {
+  "id": 104,
+  "family": "Logging Strategy",
+  "prompt": "Improve logging.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Application type and logging framework?"
+  ]
+ },
+ {
+  "id": 105,
+  "family": "Kubernetes",
+  "prompt": "Deploy to Kubernetes.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Managed cluster or self-hosted?"
+  ]
+ },
+ {
+  "id": 106,
+  "family": "Kubernetes",
+  "prompt": "Deploy Spring Boot to EKS.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 107,
+  "family": "Infrastructure as Code",
+  "prompt": "Write infrastructure code.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Terraform, CloudFormation, Pulumi, CDK?"
+  ]
+ },
+ {
+  "id": 108,
+  "family": "CI/CD",
+  "prompt": "Build deployment automation.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "CI/CD platform?"
+  ]
+ },
+ {
+  "id": 109,
+  "family": "Technical Debt Analysis",
+  "prompt": "Analyze technical debt.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Please provide repository or architecture."
+  ]
+ },
+ {
+  "id": 110,
+  "family": "Architecture Migration",
+  "prompt": "Migrate monolith to microservices.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Current architecture?",
+   "Scale?",
+   "Migration timeline?"
+  ]
+ },
+ {
+  "id": 111,
+  "family": "Version Upgrades",
+  "prompt": "Upgrade application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "From which version to which version?"
+  ]
+ },
+ {
+  "id": 112,
+  "family": "Dependency Analysis",
+  "prompt": "Analyze dependencies.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Upload pom.xml, package.json, requirements.txt, etc."
+  ]
+ },
+ {
+  "id": 113,
+  "family": "Accessibility",
+  "prompt": "Review accessibility.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Provide UI/screenshots/application."
+  ]
+ },
+ {
+  "id": 114,
+  "family": "Internationalization",
+  "prompt": "Add multilingual support.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Supported languages?"
+  ]
+ },
+ {
+  "id": 115,
+  "family": "API Integration",
+  "prompt": "Integrate payment gateway.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Stripe, Razorpay, PayPal, Adyen, etc.?"
+  ]
+ },
+ {
+  "id": 116,
+  "family": "Authentication Systems",
+  "prompt": "Implement SSO.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "OAuth2, OpenID Connect, SAML?"
+  ]
+ },
+ {
+  "id": 117,
+  "family": "Caching",
+  "prompt": "Add caching.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Application layer, API layer, database layer?"
+  ]
+ },
+ {
+  "id": 118,
+  "family": "Search Systems",
+  "prompt": "Implement search.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Elasticsearch, OpenSearch, Solr, vector search?"
+  ]
+ },
+ {
+  "id": 119,
+  "family": "AI Systems",
+  "prompt": "Build a RAG system.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Vector DB?",
+   "Embedding model?",
+   "LLM?",
+   "Chunking strategy?"
+  ]
+ },
+ {
+  "id": 120,
+  "family": "AI Systems",
+  "prompt": "Build a RAG system using PostgreSQL pgvector and Llama.",
+  "should_clarify": false,
+  "has_artifact": false,
+  "expected_questions": []
+ },
+ {
+  "id": 121,
+  "family": "Agent Systems",
+  "prompt": "Build an AI agent.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Single agent or multi-agent?",
+   "Tools required?",
+   "Memory required?"
+  ]
+ },
+ {
+  "id": 122,
+  "family": "Codebase-Wide Refactoring",
+  "prompt": "Refactor entire application.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Upload repository or relevant modules."
+  ]
+ },
+ {
+  "id": 123,
+  "family": "Multi-Repository Analysis",
+  "prompt": "Compare two repositories.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Upload both repositories."
+  ]
+ },
+ {
+  "id": 124,
+  "family": "Production Incidents",
+  "prompt": "Production is down.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Error logs?",
+   "Recent changes?",
+   "Symptoms?"
+  ]
+ },
+ {
+  "id": 125,
+  "family": "Root Cause Analysis",
+  "prompt": "Perform RCA.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Logs, metrics, timeline, and incident details?"
+  ]
+ },
+ {
+  "id": 126,
+  "family": "Security Incident",
+  "prompt": "Investigate security issue.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "What indicators or evidence are available?"
+  ]
+ },
+ {
+  "id": 127,
+  "family": "Release Planning",
+  "prompt": "Create release plan.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Which project and timeline?"
+  ]
+ },
+ {
+  "id": 128,
+  "family": "Sprint Planning",
+  "prompt": "Create sprint plan.",
+  "should_clarify": true,
+  "has_artifact": false,
+  "expected_questions": [
+   "Team size, duration, backlog?"
+  ]
+ }
+]

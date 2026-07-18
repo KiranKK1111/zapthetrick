@@ -1,0 +1,34 @@
+# Keep the build context (and image) small + free of secrets.
+.git
+.gitignore
+.venv
+venv
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime / local data — never ship into the image.
+data/
+storage/*/cache/
+*.db
+*.sqlite
+*.log
+
+# Secrets — the container renders its own config.yaml from env at start.
+# config.example.yaml IS shipped (used as the render base).
+config.yaml
+.env
+.env.*
+
+# Desktop-build artifacts (PyInstaller) — irrelevant to the server image.
+build/
+dist/
+ZapTheTrickBackend.spec
+build_windows.ps1
+
+# Tests / eval — not needed at runtime.
+tests/
+eval/

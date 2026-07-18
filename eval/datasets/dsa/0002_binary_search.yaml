@@ -1,0 +1,12 @@
+case_id: dsa-0002
+category: dsa
+sut: dsa
+input:
+  question: |
+    Implement binary search on a sorted array. Return the index of
+    the target or -1 if not found.
+expected:
+  contains:
+    - binary-search
+    - O(log n)
+  rubric_threshold: 0.6

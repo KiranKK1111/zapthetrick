@@ -1,0 +1,55 @@
+# GPU backend image for the packaged desktop app.
+#
+# Unlike deploy/Dockerfile (CPU-only, for the cloud), this builds a CUDA-enabled
+# image so the local speech-to-text + embedding models run on the HOST GPU via
+# the NVIDIA Container Toolkit (`--gpus all`). The models themselves are NOT
+# baked in — they live on a HOST bind-mount (HF_HOME=/models) so they persist
+# across container/image deletes and never re-download.
+#
+# Build context: zapthetrick_be/.  ->  docker build -f Dockerfile.gpu .
+#
+# Prereqs on the host: NVIDIA driver + NVIDIA Container Toolkit (Docker Desktop
+# on Windows: enable WSL2 GPU). Without a GPU, use deploy/Dockerfile instead.
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
+
+# Python 3.12 + the same system libs the CPU image needs (OpenMP for torch,
+# libmagic/poppler for document parsing, bubblewrap for the exec sandbox).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv python3-pip \
+        build-essential git curl libgomp1 libmagic1 poppler-utils bubblewrap \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# GPU torch FIRST (cu128 wheels — self-contained CUDA libs; matched to the
+# RTX-class GPUs this app targets). Installing it before the rest stops
+# sentence-transformers from dragging in a different torch build.
+RUN pip install --no-cache-dir --break-system-packages \
+        torch --index-url https://download.pytorch.org/whl/cu128
+
+# App deps, minus Windows-only / dev-only packages (same trims as the CPU image).
+COPY requirements.txt /tmp/requirements.txt
+RUN grep -viE '^(pywinpty|pytest)\b' /tmp/requirements.txt > /tmp/req.txt \
+    && pip install --no-cache-dir --break-system-packages -r /tmp/req.txt
+
+# App source (see .dockerignore for exclusions).
+COPY . /app
+
+# HF cache -> the host bind-mount at /models (declared in compose). Config is
+# rendered from env by deploy/entrypoint.sh at start (points at the postgres /
+# dragonfly service names on the compose network).
+ENV HF_HOME=/models \
+    HF_HUB_CACHE=/models/hub \
+    ZAPTHETRICK_CONFIG_PATH=/app/config.yaml
+
+EXPOSE 8000
+
+# start-period is generous: first boot may load multi-GB models into VRAM.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=240s --retries=6 \
+    CMD curl -fsS http://localhost:8000/api/health || exit 1
+
+ENTRYPOINT ["bash", "deploy/entrypoint.sh"]

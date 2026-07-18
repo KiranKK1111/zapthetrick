@@ -1,0 +1,14 @@
+case_id: dsa-0001
+category: dsa
+sut: dsa
+input:
+  question: |
+    Given a sorted array of integers and a target value, find the two
+    indices that sum to the target. Use two pointers.
+expected:
+  contains:
+    - two-pointer
+    - O(n)
+  omits:
+    - O(n^2)
+  rubric_threshold: 0.6

@@ -1,0 +1,379 @@
+app:
+  name: InterviewCopilot
+  theme_default: dark
+  language: en
+llm:
+  provider: auto
+  routing:
+    enabled: true
+    sticky_sessions: true
+    # Cap the fallback storm (was 20 → multi-minute hangs on flaky free tiers).
+    max_retries: 6
+    penalty_per_429: 3
+    decay_interval_s: 120
+    # Abandon a model that hasn't produced its first token within this many
+    # seconds and fall to the next — the primary "stuck / Waiting for reply…"
+    # guard. Lowered to 5s so a slow/free-tier provider fails over to a faster
+    # one sooner (snappier first token). 0 disables.
+    first_token_deadline_s: 5.0
+  model: meta-llama/llama-3.1-8b-instruct
+  code_model: google/gemini-2.5-flash
+  vision_model: google/gemini-2.5-flash
+  classifier_model: meta-llama/llama-3.1-8b-instruct
+  # Live Listen answer model — a FAST first-token PREFERENCE (the router still
+  # falls back through every model + escalates hard/expert). Uncomment ONE that
+  # matches a key you added in Settings -> Providers:
+  #   Groq:     live_model: llama-3.3-70b-versatile
+  #   Cerebras: live_model: llama-4-maverick-17b-128e-instruct
+  # live_model: llama-3.3-70b-versatile
+  # Live answers are DETAILED like chat (full prompt) and bounded by tokens.
+  live_max_tokens: 4000
+  live_first_token_timeout: 12.0
+  live_detailed: true
+  base_url: http://localhost:11434
+  openrouter_api_key: ""
+  openrouter_base_url: https://openrouter.ai/api/v1
+  nvidia_api_key: ""
+  nvidia_base_url: https://integrate.api.nvidia.com/v1
+  temperature: 0.3
+  max_tokens: 10000
+  timeout_seconds: 120.0
+  fallback_model: null
+embeddings:
+  provider: sentence_transformers
+  model: BAAI/bge-m3                  # 1024-dim, multilingual; matches pgvector(1024)
+  device: auto   # auto = CUDA when present (fast resume ingest); cpu on the VPS
+vector_store:
+  provider: pgvector                  # one store: embeddings + RAG vectors + BM25 in Postgres
+  collection: resumes
+  persist_dir: ./data/vectors
+reranker:
+  enabled: true
+  model: BAAI/bge-reranker-base
+rag:
+  chunk_size: 500
+  chunk_overlap: 50
+  top_k_retrieve: 20
+  top_k_rerank: 5
+  hybrid_search: true
+stt:
+  # FULLY LOCAL STT — no API engines, no keys. DEFAULT is Qwen3-ASR (high-
+  # accuracy multilingual, GPU-preferring) for the 24GB GPU-server deploy. On a
+  # small/laptop machine switch to "parakeet" (tiny, ~8x realtime int8 on CPU)
+  # via the STT model switcher in the app.
+  #
+  # No fallback by default: only the primary provider is warmed/downloaded, so
+  # the first-run "Preparing models" screen shows exactly the primary + the
+  # embedder — nothing else and no fallback error.
+  provider: qwen_asr
+  fallback_providers: []
+  qwen_model: Qwen/Qwen3-ASR-1.7B
+  qwen_language: null            # null = autodetect (multilingual)
+  parakeet_model: nemo-parakeet-tdt-0.6b-v3
+  parakeet_quantization: int8
+  # Streaming partials: interim transcripts while the speaker is talking,
+  # produced by this fast local provider ("" disables).
+  partial_provider: parakeet
+  # Reuse a completed partial as the FINAL transcript when it covered exactly
+  # the finalized audio and the partial engine IS the final engine — skips
+  # the redundant re-transcription on the answer's critical path.
+  final_from_partial: true
+  # base.en + hotword biasing (vocab booster) is the sweet spot: ~0.8-1.0s
+  # per utterance on CPU (3-4x faster than small.en) with EQUAL accuracy on
+  # technical terms because the hotwords fix what base.en would otherwise
+  # mangle (measured 5/5 terms, "bean lifecycle ... Kubernetes ... Postgres").
+  # Bump to small.en only if you hit accuracy issues on very noisy audio.
+  model: base.en
+  device: cpu
+  compute_type: int8
+  language: en
+  # CPU threads for transcription. 4 is optimal here — more threads add
+  # contention and SLOW a single utterance (measured), they don't speed it.
+  cpu_threads: 4
+  # beam_size 1 (greedy) is ~1.5x faster than beam 5 with no measured
+  # accuracy loss on live utterances once hotword biasing is on — the right
+  # trade for snappy live responses. Raise to 5 if you ever need max accuracy
+  # on very noisy audio at the cost of latency.
+  beam_size: 1
+  dual_engine_enabled: false
+  secondary_provider: null
+  vocab_boost_enabled: true
+  # Feed the vocabulary booster's term list as faster-whisper `hotwords`
+  # (a stronger bias than initial_prompt) so domain names survive.
+  hotwords_enabled: true
+audio:
+  source: system_loopback
+  sample_rate: 16000
+  chunk_ms: 500
+  vad: silero
+  vad_threshold: 0.5
+  # Silence gap that ends a LONG utterance. A SHORT utterance (< min_utterance_ms
+  # of speech, e.g. "What") needs the longer short_utterance_gap_ms before it
+  # finalizes, so a brief mid-question breath doesn't cut "What <breath> is
+  # microservices?" down to just "What" (adaptive endpointing).
+  endpoint_silence_ms: 650
+  min_utterance_ms: 700
+  short_utterance_gap_ms: 1200
+  # End-of-speech partial: after this much trailing silence, snapshot one
+  # extra partial immediately (bypassing partial_interval_ms) so the trailing
+  # '?' that unlocks the early endpoint gap + speculative answering is fresh.
+  end_partial_trailing_ms: 160
+  # Gap that ends an utterance whose partial reads MID-THOUGHT ("Can you
+  # tell me" — even with an ASR-guessed '?'): wait longer than the normal
+  # endpoint so a thinking pause doesn't chop the question into fragments.
+  incomplete_gap_ms: 1200
+  # Pre-speech audio prepended at utterance start (soft onsets not clipped).
+  preroll_ms: 240
+  # Within this window after prior speech the VAD start threshold relaxes by
+  # vad_reentry_delta, so quieter continuations still open the gate.
+  vad_reentry_window_ms: 3000
+  vad_reentry_delta: 0.15
+question_detection:
+  use_llm_classifier: true
+  min_question_length: 5
+  followup_window_seconds: 60
+  followup_similarity_threshold: 0.7
+  recent_q_window: 3
+code_solver:
+  default_language: python
+  include_complexity: true
+  include_edge_cases: true
+  include_alternatives: true
+  two_step_solve: true
+  ocr_max_tokens: 1500
+web_search:
+  provider: duckduckgo
+  max_results: 5
+ui:
+  themes_path: ./themes/
+  show_confidence: true
+  show_token_count: false
+server:
+  host: 127.0.0.1
+  port: 8000
+  ws_path: /ws/live
+  cors_origins:
+  - '*'
+database:
+  postgres:
+    host: localhost
+    port: 5432
+    db: postgres
+    schema_name: zapthetrick
+    user: postgres
+    password: ""
+    password_ref: ""
+    pool_min: 5
+    pool_max: 20
+    enable_age: true
+    enable_pg_search: false
+  cache:
+    backend: dragonfly
+    url: redis://localhost:6379
+    default_ttl_seconds: 3600
+  storage:
+    blobs_backend: postgres
+    blobs_path: ./data/blobs
+    minio_endpoint: null
+    minio_access: null
+    minio_secret: ""
+    minio_access_ref: null
+    minio_secret_ref: ""
+  migrations:
+    auto_apply: true
+    migrations_dir: ./storage/migrations
+  backup:
+    enabled: true
+    schedule_cron: 0 3 * * *
+    retention_days: 30
+    target_dir: ./data/backups
+agents:
+  enabled:
+    supervisor: true
+    planner: true
+    clarifier: true
+    retriever: true
+    memory: true
+    persona: true
+    coder: true
+    vision: true
+    web: false
+    grounder: true
+    critic: true
+    reflector: true
+    suggester: true
+  priorities:
+    p0:
+    - supervisor
+    - planner
+    - retriever
+    - persona
+    - coder
+    - grounder
+    p1:
+    - memory
+    - critic
+    - suggester
+    p2:
+    - reflector
+  deadlines_ms:
+    intent: 250
+    plan: 200
+    retrieve: 500
+    first_token: 1500
+    total: 8000
+    p1_grace: 1500
+advanced_rag:
+  embedding_model: BAAI/bge-m3
+  use_hierarchical_chunking: true
+  use_query_rewriting: true
+  use_hyde: true
+  use_contextual_compression: true
+  use_mmr: true
+  use_knowledge_graph: true
+  small_to_big_retrieval: true
+  top_k_retrieve: 30
+  top_k_rerank: 10
+  top_k_final: 5
+  compression_target_ratio: 0.4
+memory:
+  episodic_enabled: true
+  semantic_enabled: true
+  reflection_on_idle_minutes: 5
+  reflection_on_session_end: true
+  user_owns_memory: true
+learning:
+  online_critique: true
+  online_revision_threshold: 0.6
+  feedback_capture: true
+  speculative_execution: true
+ui_advanced:
+  layout_density: comfortable
+  show_tool_chips: true
+  show_source_citations: true
+  show_confidence: true
+  show_suggestions_rail: true
+  reduced_motion: auto
+  font_scale: 1.0
+themes:
+  default: dark
+  available:
+  - dark
+  - light
+  - midnight
+  - solarized
+  accent_color: '#7C5CFF'
+mcp:
+  servers: []
+  auto_grant_low_danger: true
+response_arch:
+  enabled: true
+  default_depth: standard
+continuity:
+  auto_link: true
+  auto_link_threshold: 0.65
+  detect_followups: true
+technical_pipeline:
+  enabled: true
+  force_domain: null
+live:
+  # Hard budget (seconds) on one answer's generation; past it the partial
+  # answer is kept and the session moves on.
+  answer_timeout_s: 60
+  # Post-LLM VERIFIER: score every finished answer (relevance + hallucination
+  # risk; non-blocking) and regenerate once on a weak verdict.
+  answer_verify: true
+  answer_regenerate: true
+  verify_min_relevance: 0.55
+  verify_max_hallucination: 0.75
+  structured_events: true
+  state_machine: true
+  turn_taking: true
+  turn_settle_ms: 600
+  continuation_merge: true
+  continuation_window_s: 8.0
+  hypothetical_question: true
+  prosody_promotion: true
+  topic_graph: true
+  multi_level_memory: true
+  phase_detection: true
+  answer_strategy: true
+  answer_planning: true
+  answer_planning_two_step: false
+  knowledge_gap_guard: true
+  knowledge_gap_threshold: 0.5
+  adaptive_latency: true
+  transcript_repair: true
+  ensemble_detection: true
+  interruption_handling: true
+  satisfaction_detection: true
+  uncertainty_tracking: true
+  style_learning: true
+  event_log: true
+  consent: false
+  candidate_audio_only: false
+  pii_redaction: true
+  transcript_sanitization: true
+  retention_days: 0
+  capture_topology: true
+  session_resume: true
+  mobile_runtime: true
+  glanceable_surface: true
+  candidate_awareness: true
+  multilingual: true
+  answer_language: auto
+  session_budget: true
+  max_concurrent_answers: 3
+  max_answers_per_session: 0
+  # Speaker diarization needs a heavy model — kept OFF on the CPU cluster.
+  # Candidate self-answer detection uses the lightweight echo check instead.
+  diarization: false
+  world_model: true
+  objective_depth: true
+  answer_revision: true
+  false_premise: true
+  contradiction: true
+  question_prediction: true
+  interview_knowledge: true
+  knowledge_pack: ''
+  state_validation: true
+  session_health: true
+  delivery_coaching: true
+  candidate_profile: true
+  interview_assets: true
+  org_intelligence: true
+  answer_calibration: true
+  interview_modes: true
+  negotiation: true
+  emotion_signal: true
+  outcome_estimate: true
+  session_replay: true
+  mock_mode: true
+  multimodal: true
+  implicit_question: true
+  evidence: true
+  multi_pass: true
+  coreference: true
+  rhetorical: true
+  acoustic_adaptation: true
+  override_gate: true
+  stage_budget: true
+  feedback_loop: true
+  skill_gap: true
+  cognitive_load: true
+  gpu_stt: false
+  career_intelligence: false
+  enterprise_readiness: false
+  # Dual-source: hear BOTH voices; the candidate channel is absorbed into the
+  # shared graph + commitments and never answered. Powers salary negotiation
+  # awareness and candidate self-answer skipping.
+  dual_source: true
+  candidate_channel: true
+  role_memory: true
+  commitment_tracking: true
+  # Candidate self-answer echo skip: when the candidate speaks (or paraphrases)
+  # the answer already shown on screen, recognize it semantically and skip
+  # transcribing/answering it instead of treating it as a new question.
+  candidate_echo_skip: true
+  candidate_echo_threshold: 0.72
+

@@ -1,0 +1,17 @@
+case_id: concept-0001
+category: concept
+sut: chat
+input:
+  question: |
+    Explain what Apache Kafka is, in 3 sentences, and name two
+    common use cases.
+expected:
+  contains:
+    - Kafka
+    - distributed
+  rubric_prompt: |
+    Did the answer correctly describe Kafka as a distributed event
+    streaming platform and give at least two plausible use cases
+    (log aggregation, event sourcing, message queue, real-time
+    analytics, microservice integration)? Score 0–1.
+  rubric_threshold: 0.6
