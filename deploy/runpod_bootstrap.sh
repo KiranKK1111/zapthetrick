@@ -93,7 +93,7 @@ fi
 echo "==> [5/8] Python venv + GPU torch (cu124) + app deps"
 [ -d "$VENV_DIR" ] || python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip wheel
-"$VENV_DIR/bin/pip" install torch --index-url https://download.pytorch.org/whl/cu124
+"$VENV_DIR/bin/pip" install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 grep -viE '^(pywinpty|pytest)\b' "$REPO_DIR/requirements.txt" > /tmp/req.linux.txt
 "$VENV_DIR/bin/pip" install -r /tmp/req.linux.txt
 # 8-bit quantization for the 7B VLM (GPU-only; not in requirements.txt).
