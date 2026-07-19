@@ -115,8 +115,22 @@ def describe(images: Sequence[bytes], prompt: str) -> str:
     content = [{"type": "image"} for _ in imgs]
     content.append({"type": "text", "text": prompt})
     messages = [{"role": "user", "content": content}]
-    text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True)
+    try:
+        text = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True)
+    except Exception as exc:  # noqa: BLE001
+        # Some transformers/processor versions don't ship a chat template on the
+        # Qwen2.5-VL PROCESSOR (only the tokenizer, or none) — build the prompt
+        # in Qwen2.5-VL's exact ChatML + vision format by hand. `<|image_pad|>`
+        # is expanded to the right number of image tokens by the processor call
+        # below when `images=` is passed.
+        log.info("qwen2.5-vl: processor has no chat template (%s) — using the "
+                 "manual Qwen2.5-VL prompt", exc)
+        vision = "".join(
+            "<|vision_start|><|image_pad|><|vision_end|>" for _ in imgs)
+        text = ("<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+                "<|im_start|>user\n" + vision + prompt +
+                "<|im_end|>\n<|im_start|>assistant\n")
     inputs = processor(text=[text], images=imgs, padding=True,
                        return_tensors="pt").to(device)
     with torch.inference_mode():
