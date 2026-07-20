@@ -119,7 +119,12 @@ stdout_logfile=/workspace/pgbackup.log
 stderr_logfile=/workspace/pgbackup.log
 
 [program:watchdog]
-command=bash -c 'f=0; while true; do sleep 60; if curl -fsS -m 5 http://127.0.0.1:${APP_PORT}/api/health >/dev/null 2>&1; then f=0; else f=\$((f+1)); if [ \$f -ge 3 ]; then echo "watchdog: 3 health failures -> restart app"; supervisorctl restart app; f=0; fi; fi; done'
+# IMPORTANT: do NOT restart the app during first-boot model warmup. Loading the
+# 7B vision model starves the event loop for a couple minutes, so /api/health
+# stops answering — but the app is busy, not hung. So: wait until the app is
+# healthy ONCE (however long the warmup/model-download takes), and only THEN
+# start policing it. This stops the kill-mid-warmup -> reload -> slower loop.
+command=bash -c 'until curl -fsS -m 10 http://127.0.0.1:${APP_PORT}/api/health >/dev/null 2>&1; do sleep 15; done; echo "watchdog: app healthy — monitoring"; f=0; while true; do sleep 60; if curl -fsS -m 10 http://127.0.0.1:${APP_PORT}/api/health >/dev/null 2>&1; then f=0; else f=\$((f+1)); if [ \$f -ge 5 ]; then echo "watchdog: \$f consecutive health failures -> restart app"; supervisorctl restart app; f=0; fi; fi; done'
 autostart=true
 autorestart=true
 priority=40
