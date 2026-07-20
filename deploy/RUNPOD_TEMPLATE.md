@@ -48,7 +48,7 @@ Deploy**:
 | **Expose HTTP Ports** | `8888` |
 | **Expose TCP Ports** | `22` |
 | **Env variables** | `ZAPTHETRICK_ENCRYPTION_KEY` (required) · `APP_PORT=8888` · optional `POSTGRES_PASSWORD`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY` |
-| **GPU Compatibility** | Min vRAM **24 GB**, Min RAM **32 GB**, CUDA **≥12.4**; compatible GPUs A40 / A6000 / L40S / RTX 4090 / RTX 3090 / A5000 (**not** RTX 50-series — Blackwell needs a cu128 image) |
+| **GPU Compatibility** | Min vRAM **24 GB**, Min RAM **32 GB**, CUDA **≥12.8**; the cu128 image runs on **any modern GPU** — Blackwell (RTX PRO 4500/6000, RTX 50-series) *and* Ampere/Ada (A40 / A6000 / L40S / RTX 4090 / A5000 / A100). Pick whatever's in stock. |
 
 To deploy: **Deploy a Pod → choose any available compatible GPU → select this
 template → attach the volume → Deploy.** That's the only UI you touch.

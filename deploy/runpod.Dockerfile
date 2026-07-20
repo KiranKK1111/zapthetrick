@@ -2,7 +2,7 @@
 # RunPod GPU pod image for zapthetrick_be.
 #
 # The WHOLE environment AND the app code are baked at build time — Postgres 18 +
-# pgvector, Dragonfly, the Python venv + GPU torch (cu124), the sandbox toolchains,
+# pgvector, Dragonfly, the Python venv + GPU torch (cu128), the sandbox toolchains,
 # the app's Python deps, and the source at /opt/zapthetrick_be — so the pod is
 # fully self-contained: pull the image, set env vars, and it starts. No git clone,
 # no REPO_URL. Only the /workspace-VOLUME-PERSISTENT bits (config.yaml, the model
@@ -14,7 +14,10 @@
 #   docker build -f deploy/runpod.Dockerfile -t <you>/zapthetrick-runpod:latest .
 #   docker push <you>/zapthetrick-runpod:latest
 # =============================================================================
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+# CUDA 12.8 → torch cu128 wheels include Blackwell (sm_120) kernels AND stay
+# backward-compatible down to Ampere/Ada, so ONE image runs on any modern RunPod
+# GPU (RTX PRO Blackwell, RTX 50-series, A40/A6000/L40S/4090/A5000, A100, …).
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PG_MAJOR=18 \
@@ -54,15 +57,16 @@ RUN cd /tmp && wget -qO df.tgz \
   && tar xzf df.tgz && mv dragonfly-x86_64 /usr/local/bin/dragonfly \
   && chmod +x /usr/local/bin/dragonfly && rm -f /tmp/df.tgz
 
-# 5) Python venv + GPU torch (cu124) + the app's deps — baked so startup is fast.
+# 5) Python venv + GPU torch (cu128) + the app's deps — baked so startup is fast.
 #    Only requirements.txt is copied first, so this layer caches across code
 #    changes. (`pywinpty` is Windows-only; `pytest` is dev-only.)
+#    cu128 wheels carry Blackwell (sm_120) kernels + older archs — one build fits all.
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN python3 -m venv "$VENV" \
   && "$VENV/bin/pip" install --no-cache-dir --upgrade pip wheel \
   && "$VENV/bin/pip" install --no-cache-dir torch torchvision \
-       --index-url https://download.pytorch.org/whl/cu124 \
+       --index-url https://download.pytorch.org/whl/cu128 \
   && grep -viE '^(pywinpty|pytest)\b' /app/requirements.txt > /tmp/req.txt \
   && "$VENV/bin/pip" install --no-cache-dir -r /tmp/req.txt \
   # 8-bit quantization for the 7B VLM (GPU-only; kept out of requirements.txt so
