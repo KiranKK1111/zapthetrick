@@ -61,6 +61,39 @@ def test_resume_registry_is_per_session():
     assert get_registry("s2") is not a
 
 
+# ---- FE-tagged audio framing (remote-backend capture) ------------------
+def test_fe_frame_split_roles():
+    import numpy as np
+
+    from app.api.routes_ws import _decode_pcm, _split_fe_frame
+
+    # Two int16 samples = 4 bytes of PCM; prefix a role byte.
+    pcm = np.array([1000, -2000], dtype="<i2").tobytes()
+    assert len(pcm) == 4
+
+    role, body = _split_fe_frame(bytes([0x00]) + pcm)   # interviewer
+    assert role == 0 and body == pcm
+    assert _decode_pcm(body).shape == (2,)              # even → decodes
+
+    role, body = _split_fe_frame(bytes([0x01]) + pcm)   # candidate
+    assert role == 1 and body == pcm
+
+    # Empty frame degrades to the interviewer role, no exception.
+    assert _split_fe_frame(b"") == (0, b"")
+
+
+def test_fe_frame_odd_pcm_after_strip_is_rejected():
+    # A well-formed tagged frame is [1 role byte] + [even PCM]; the total is
+    # odd. After stripping the byte the PCM must be even and decode cleanly.
+    # If a malformed frame leaves an odd body, _decode_pcm returns None (never
+    # raises) so one bad frame can't kill the socket.
+    from app.api.routes_ws import _decode_pcm, _split_fe_frame
+
+    _role, body = _split_fe_frame(bytes([0x01, 0x11, 0x22, 0x33]))  # 3-byte body
+    assert len(body) == 3
+    assert _decode_pcm(body) is None
+
+
 # ---- mobile ------------------------------------------------------------
 def test_mobile_error_classification():
     assert mobile.classify_audio_error("Microphone permission denied")["state"] == "mic_permission"

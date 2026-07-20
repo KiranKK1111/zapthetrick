@@ -1,15 +1,16 @@
 # =============================================================================
 # RunPod GPU pod image for zapthetrick_be.
 #
-# The WHOLE environment is baked at build time — Postgres 18 + pgvector,
-# Dragonfly, the Python venv + GPU torch (cu124), the sandbox toolchains, and
-# the app's Python deps — so a pod starts in seconds instead of running a
-# multi-minute bootstrap. Only the /workspace-VOLUME-dependent bits (the DB data
-# dir, config.yaml, model cache, and the code checkout for auto-deploy) are done
-# at RUNTIME by deploy/runpod_entrypoint.sh.
+# The WHOLE environment AND the app code are baked at build time — Postgres 18 +
+# pgvector, Dragonfly, the Python venv + GPU torch (cu124), the sandbox toolchains,
+# the app's Python deps, and the source at /opt/zapthetrick_be — so the pod is
+# fully self-contained: pull the image, set env vars, and it starts. No git clone,
+# no REPO_URL. Only the /workspace-VOLUME-PERSISTENT bits (config.yaml, the model
+# cache, and Postgres backups) are handled at RUNTIME by runpod_entrypoint.sh, so
+# recreating on any available GPU with the same volume gives back the same system.
 #
-# Build + push to a registry, then point the Terraform `image_name` at the tag
-# and set `use_custom_image = true`:
+# Build + push (use deploy/build.sh), then deploy via a saved RunPod template or
+# deploy/deploy.sh. The image contains source → publish to a PRIVATE registry.
 #   docker build -f deploy/runpod.Dockerfile -t <you>/zapthetrick-runpod:latest .
 #   docker push <you>/zapthetrick-runpod:latest
 # =============================================================================
@@ -68,13 +69,15 @@ RUN python3 -m venv "$VENV" \
   # the CPU/Windows desktop build isn't forced to install a CUDA wheel).
   && "$VENV/bin/pip" install --no-cache-dir bitsandbytes
 
-# 6) Deploy scripts only — these hold the ENTRYPOINT. The backend CODE is NOT
-#    baked into the image; it's pulled from your repo to /workspace at runtime
-#    (set REPO_URL). So the image is a reusable ENVIRONMENT, your code stays
-#    private in Bitbucket, and a code change never needs an image rebuild.
-COPY deploy/ /app/deploy/
+# 6) Bake the app CODE into the image (self-contained — no git clone at boot,
+#    no REPO_URL). Copied LAST so a code change doesn't bust the deps layer.
+#    Lives at /opt/zapthetrick_be — NOT under /workspace, because the network
+#    volume is mounted there at runtime and would hide baked files. `.dockerignore`
+#    already keeps secrets/venv/caches/config.yaml out of the context.
+#    NOTE: this image now contains your source — publish it to a PRIVATE registry.
+COPY . /opt/zapthetrick_be
 
 EXPOSE 8888 22
 
-# 7) Runtime init (DB dir + config + code + services on the persistent volume).
-ENTRYPOINT ["bash", "/app/deploy/runpod_entrypoint.sh"]
+# 7) Runtime init: env→config, Postgres restore, services under supervisor.
+ENTRYPOINT ["bash", "/opt/zapthetrick_be/deploy/runpod_entrypoint.sh"]

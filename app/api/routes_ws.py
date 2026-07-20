@@ -2582,17 +2582,33 @@ async def live_listen(
             if msg.get("bytes") is not None:
                 # Audio frame. Treat as 16-bit PCM little-endian and convert.
                 raw = msg["bytes"]
+                # FE-tagged framing (remote backend): a pod can't capture the
+                # interview's system-loopback audio itself, so the Flutter
+                # client captures BOTH the interviewer (system loopback) and
+                # the candidate (mic) locally and streams them over this one
+                # socket, prefixing each frame with a 1-byte role tag
+                # (0x00 = interviewer/answered, 0x01 = candidate/absorbed). We
+                # split the tag here and route to the matching segmenter — the
+                # server-side analogue of the desktop dual-capture split below.
+                _seg = None
+                if capture_state.get("fe_tagged"):
+                    role, raw = _split_fe_frame(raw)
+                    # SOLO answers every source; STANDARD answers only the
+                    # interviewer role and absorbs the candidate.
+                    _seg = segmenter if solo_mode else (
+                        candidate_segmenter if role == 1 else segmenter)
                 chunk = _decode_pcm(raw)
                 if chunk is not None:
-                    # Client PCM is the CANDIDATE mic only when the server is
-                    # also capturing loopback (desktop dual-source). Otherwise
-                    # (mobile) the client mic IS the interviewer — main segmenter.
-                    # SOLO mode: one source drives everything → always the main
-                    # (answerable) segmenter, so the test voice is answered.
-                    _seg = (segmenter if solo_mode else (
-                            candidate_segmenter
-                            if capture_state.get("task") is not None
-                            else segmenter))
+                    # Untagged legacy path: client PCM is the CANDIDATE mic only
+                    # when the server is also capturing loopback (desktop
+                    # dual-source). Otherwise (mobile) the client mic IS the
+                    # interviewer — main segmenter. SOLO: one source drives
+                    # everything → always the main (answerable) segmenter.
+                    if _seg is None:
+                        _seg = (segmenter if solo_mode else (
+                                candidate_segmenter
+                                if capture_state.get("task") is not None
+                                else segmenter))
                     try:
                         await _seg.push(chunk)
                     except asyncio.CancelledError:
@@ -2776,6 +2792,15 @@ async def _handle_control(
         # same VAD -> STT -> classify -> answer pipeline. No client mic needed.
         source = payload.get("source") or cfg.audio.source
         await _start_capture(segmenter, source, capture_state, send)
+    elif kind == "client_capture":
+        # Remote-backend (pod) path: the client can't rely on the server to
+        # capture the interview's system audio, so it captures BOTH sources
+        # locally and streams them role-tagged (see the binary-frame handler).
+        # This just flips the per-connection framing flag; the audio itself
+        # arrives as tagged binary frames. Fail-open — defaults to tagged.
+        capture_state["fe_tagged"] = bool(payload.get("tagged", True))
+        await send({"type": "capture",
+                    "state": "client" if capture_state["fe_tagged"] else "server"})
     elif kind == "stop_capture":
         await _stop_capture(capture_state)
         await segmenter.flush()
@@ -2984,6 +3009,20 @@ async def _stop_capture(capture_state: dict) -> None:
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
     capture_state["task"] = None
+
+
+def _split_fe_frame(raw: bytes) -> tuple[int, bytes]:
+    """Split an FE-tagged audio frame into (role, pcm_bytes).
+
+    The Flutter client prefixes each PCM frame with a single role byte when it
+    captures audio locally and streams both sources over one socket:
+    0x00 = interviewer (system loopback, answered), 0x01 = candidate (mic,
+    absorbed). An empty frame yields (0, b"") so it degrades to the interviewer
+    role rather than raising.
+    """
+    if not raw:
+        return 0, b""
+    return raw[0], raw[1:]
 
 
 def _decode_pcm(raw: bytes) -> np.ndarray | None:
