@@ -183,6 +183,15 @@ def create_engine() -> AsyncEngine:
         },
     )
     SessionFactory = async_sessionmaker(_engine, expire_on_commit=False)
+    # Install the per-transaction tenant-scope hook (§10.2 RLS). No-op unless
+    # TENANT_RLS_ENABLE=1; safe to call on every (re)create — it self-guards.
+    try:
+        from storage.tenancy import (
+            install_owner_stamp_hook, install_rls_session_hook)
+        install_owner_stamp_hook()  # every new session gets its owner (§10.1c)
+        install_rls_session_hook()
+    except Exception:  # noqa: BLE001 — never let RLS wiring block engine startup
+        pass
     return _engine
 
 

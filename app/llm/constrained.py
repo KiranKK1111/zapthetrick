@@ -26,11 +26,18 @@ def extract_json(text: str) -> str:
     m = _FENCE.search(t)
     if m:
         t = m.group(1).strip()
-    # Trim to the outermost object/array if there's leading/trailing prose.
+    # Trim to the outermost JSON value if there's leading/trailing prose. Pick
+    # the structure whose OPENING delimiter appears first, so a top-level array
+    # `[{...},{...}]` isn't mis-trimmed to its inner objects (dropping the
+    # brackets) by an object-first bias.
+    candidates = []
     for open_c, close_c in (("{", "}"), ("[", "]")):
         i, j = t.find(open_c), t.rfind(close_c)
         if 0 <= i < j:
-            return t[i:j + 1]
+            candidates.append((i, j, close_c))
+    if candidates:
+        i, j, _ = min(candidates, key=lambda c: c[0])
+        return t[i:j + 1]
     return t
 
 

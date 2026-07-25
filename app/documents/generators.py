@@ -215,6 +215,21 @@ def render_document(content: str, fmt: str, title: str = "",
     f = normalize_format(fmt)
     raw = apply_resume_template(content or "", template)
     content = _strip_outer_fence(raw)
+    # Stage-4 §3.3 — Typst PDF: when enabled AND the binary is baked, render the
+    # PDF with Typst (superior typography). Any miss (disabled / no binary /
+    # compile error) returns None and drops through to the existing renderer
+    # below, so output is byte-identical until Typst is switched on + present.
+    if f == "pdf":
+        try:
+            from app.documents import typst_render as _typ
+            if _typ.enabled() and _typ.available():
+                _md = _enrich_prose_markdown(
+                    _apply_branding_md(content, export_settings), title, language)
+                _pdf = _typ.render_pdf(_md, title=title)
+                if _pdf:
+                    return _pdf, _MEDIA["pdf"], "pdf"
+        except Exception:  # noqa: BLE001 — never let Typst break the export
+            pass
     # Phase 1: PDF/DOCX/PPTX render straight from the DocumentModel IR (built +
     # enriched once by `_prose_model`). The legacy Markdown-tuple renderers stay
     # as a fallback behind `model_driven_render`. TXT/MD keep the Markdown path

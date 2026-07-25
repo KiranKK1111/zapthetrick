@@ -76,6 +76,17 @@ async def create_live_session(
         },
     )
     await session.commit()
+
+    # Stage-6 §4.6 / §2.7 F — pin + reserve + warm the Live model plan at session
+    # start so the pre-flight board's `model_plan` check goes green and the first
+    # turn fires on a warm connection. Flag-gated (`routing.live_plan`) +
+    # fail-open: a planning hiccup never blocks session creation.
+    try:
+        from app.live.session_plan import plan_live_session
+        await plan_live_session(str(row.id), profile="live_answer")
+    except Exception:  # noqa: BLE001
+        pass
+
     return _live_summary(row)
 
 
@@ -95,10 +106,12 @@ async def list_live_sessions(
 ):
     """List past live-interview sessions (org name + created date) for the
     Live sidebar, most recent first."""
+    from app.api.auth import resolve_user_id
     from storage.repos import SessionRepo
 
     try:
-        rows = await SessionRepo(session).list(type="live", limit=limit)
+        rows = await SessionRepo(session).list(
+            type="live", user_id=await resolve_user_id(), limit=limit)
         return [_live_summary(r) for r in rows]
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"list_live_sessions: {exc}")

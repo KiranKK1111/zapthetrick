@@ -167,6 +167,17 @@ def _verdict(got: str, want: str) -> bool:
     return _canon(gp) == _canon(wp)
 
 
+_EXAMPLES_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {"input": {"type": "string"},
+                       "expected": {"type": "string"}},
+        "required": ["input", "expected"],
+    },
+}
+
+
 async def _generate_examples(problem_text: str, language_label: str,
                              on_stage=None, n: int = 3) -> list[dict]:
     """When the problem shows NO worked examples, ask the model to INVENT a few
@@ -174,7 +185,7 @@ async def _generate_examples(problem_text: str, language_label: str,
     returns [] on any trouble. The verdict flags these as generated."""
     try:
         await _emit(on_stage, "Deriving test cases from the problem")
-        import json
+        from app.core import structured as _structured
         prompt = (
             f"Problem:\n{problem_text[:2000]}\n\n"
             f"This problem shows NO worked examples. Invent {n} small test cases "
@@ -186,11 +197,13 @@ async def _generate_examples(problem_text: str, language_label: str,
         txt = await _stream_complete(
             [{"role": "user", "content": prompt}], "standard",
             session_key="verify-examples")
-        m = re.search(r"\[.*\]", txt or "", re.DOTALL)
-        if not m:
+        # Robust parse (§8.7): tolerates fenced blocks, trailing commas, and
+        # surrounding prose that a bare `re.search + json.loads` chokes on.
+        arr, _errs = _structured.parse_with_repair(txt or "", _EXAMPLES_SCHEMA)
+        if not isinstance(arr, list):
             return []
         out = []
-        for d in (json.loads(m.group(0)) or [])[:6]:
+        for d in arr[:6]:
             if isinstance(d, dict) and "input" in d and "expected" in d:
                 s_in, s_exp = str(d["input"]), str(d["expected"])
                 out.append({"input": s_in, "input_raw": s_in, "expected": s_exp})

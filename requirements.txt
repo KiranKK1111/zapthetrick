@@ -17,6 +17,8 @@ httpx==0.28.1
 pydantic==2.10.4
 pyyaml==6.0.2
 cryptography==48.0.0                # AES-256-GCM at-rest encryption for LLM provider API keys
+PyJWT[crypto]==2.13.0               # verify Supabase-issued JWTs locally (vNext §10.1 auth)
+python-dotenv==1.2.2                # load a local .env (auth secret, Google OAuth) in dev
 
 # ---- Storage stack (DataBaseArchitecture.md) ---------------------------
 # Vectors live in Postgres via pgvector — no separate vector-DB client.
@@ -50,6 +52,12 @@ websockets==14.1
 # Lazy-imported in app/stt/whisper_stt.py — only loaded when STT is used.
 faster-whisper==1.1.0
 numpy==2.2.0
+
+# ---- Neural TTS (§10.5) ------------------------------------------------
+# Natural voices for read-aloud + voice mode. Free, key-less Edge Neural voices
+# (the dev-box + fallback path); Kokoro is the on-GPU pod engine. Lazy-imported
+# in app/live/tts_synth.py; served via POST /api/tts.
+edge-tts==7.2.8
 # Local STT chain (no API engines): Parakeet v3 primary + Qwen3-ASR fallback.
 # qwen-asr pulls gradio for its demo UI, which force-upgrades fastapi past
 # our pin — install with `pip install qwen-asr && pip uninstall -y gradio

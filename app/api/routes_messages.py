@@ -43,6 +43,25 @@ class MessageFeedback(BaseModel):
     signal: str | None = None
 
 
+async def _owned_message_or_404(session, message_id):
+    """Fetch a message and verify its session belongs to the current user
+    (§10.1c) — a user can't act on another account's messages by id. Legacy
+    NULL-owned sessions stay accessible (pre-accounts data)."""
+    from app.api.auth import resolve_user_id
+    from storage.models import Session as SessionRow
+    from storage.repos import MessageRepo
+
+    msg = await MessageRepo(session).get(message_id)
+    if msg is None:
+        raise HTTPException(404, detail="Message not found")
+    uid = await resolve_user_id()
+    sess = await session.get(SessionRow, msg.session_id)
+    if (sess is not None and sess.user_id is not None
+            and uid is not None and sess.user_id != uid):
+        raise HTTPException(404, detail="Message not found")
+    return msg
+
+
 @router.post("/{message_id}/feedback")
 async def set_message_feedback(
     message_id: str,
@@ -50,11 +69,9 @@ async def set_message_feedback(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Store (or clear) the user's 👍/👎 on a message. At most one per message."""
-    from storage.repos import FeedbackRepo, MessageRepo
+    from storage.repos import FeedbackRepo
 
-    msg = await MessageRepo(session).get(message_id)
-    if msg is None:
-        raise HTTPException(404, detail="Message not found")
+    msg = await _owned_message_or_404(session, message_id)
 
     raw = (body.signal or "").strip().lower()
     signal = _SIGNAL_ALIASES.get(raw) if raw else None
@@ -79,11 +96,7 @@ async def resolve_message(
     Used when the user clicks Continue on an interrupted turn so the
     "Response interrupted" bar doesn't reappear after a reload.
     """
-    from storage.repos import MessageRepo
-
-    msg = await MessageRepo(session).get(message_id)
-    if msg is None:
-        raise HTTPException(404, detail="Message not found")
+    msg = await _owned_message_or_404(session, message_id)
     msg.incomplete = False
     await session.commit()
     return {"ok": True, "message_id": str(msg.id)}
@@ -99,6 +112,8 @@ async def delete_message(
     its session (used by retry/edit to regenerate from a clean point)."""
     from storage.repos import MessageRepo
 
+    # Ownership first — you can only delete messages in your own sessions.
+    await _owned_message_or_404(session, message_id)
     repo = MessageRepo(session)
     if cascade == "after":
         deleted = await repo.delete_from(message_id)

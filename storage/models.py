@@ -72,6 +72,16 @@ class User(Base):
     preferences: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default="'{}'::jsonb"
     )
+    # Native email/password accounts (vNext §10.1c). All nullable so the legacy
+    # device-user rows (no email/password) are unaffected — auth is additive.
+    # Uniqueness is enforced case-insensitively by a partial index in migration
+    # 0021 (lower(email) WHERE email IS NOT NULL) — not a plain column constraint.
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
 
 
 # ---- Resumes ------------------------------------------------------------
@@ -535,6 +545,13 @@ class LLMApiKey(Base):
     __tablename__ = "llm_api_keys"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Per-user provider keys (vNext §10.1c/§10.2). NULL = legacy/global key used
+    # in anonymous (auth-off) mode; a logged-in user sees only their own rows.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     platform: Mapped[str] = mapped_column(Text, nullable=False)
     label: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
@@ -550,7 +567,10 @@ class LLMApiKey(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    __table_args__ = (Index("ix_llm_api_keys_platform", "platform"),)
+    __table_args__ = (
+        Index("ix_llm_api_keys_platform", "platform"),
+        Index("ix_llm_api_keys_user_platform", "user_id", "platform"),
+    )
 
 
 class LLMModel(Base):
@@ -559,6 +579,14 @@ class LLMModel(Base):
     __tablename__ = "llm_models"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Per-user catalog (§10.1c). Cloud models are owned by the user who seeded
+    # them (on key-add); the shared on-pod `local` floor stays NULL (one physical
+    # model for everyone). NULL cloud rows are legacy/global and unused per-user.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     platform: Mapped[str] = mapped_column(Text, nullable=False)
     model_id: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
@@ -579,7 +607,10 @@ class LLMModel(Base):
     )
 
     __table_args__ = (
-        Index("ix_llm_models_platform_model", "platform", "model_id", unique=True),
+        # Uniqueness is now per-user (a user's catalog is independent). The
+        # partial unique indexes are created in migration 0023 (one for owned
+        # rows keyed by user_id, one for the shared local/NULL rows).
+        Index("ix_llm_models_user_platform", "user_id", "platform"),
     )
 
 
@@ -589,6 +620,14 @@ class LLMFallbackConfig(Base):
     __tablename__ = "llm_fallback_config"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Denormalized owner (§10.1c) — a fallback row belongs to the same user as
+    # its model. NULL for the shared local floor. model_db_id already implies the
+    # owner (it points at a per-user model), so this is for direct scoping + RLS.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     model_db_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("llm_models.id", ondelete="CASCADE"), nullable=False
     )
@@ -598,6 +637,7 @@ class LLMFallbackConfig(Base):
     __table_args__ = (
         Index("ix_llm_fallback_model", "model_db_id", unique=True),
         Index("ix_llm_fallback_priority", "priority"),
+        Index("ix_llm_fallback_user", "user_id"),
     )
 
 

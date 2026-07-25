@@ -230,7 +230,8 @@ def test_tts_speech_markup_strips_markdown():
     out = T.speech_markup("# Title\n- **bold** item, e.g. `code`\n```py\nx=1\n```")
     assert "**" not in out and "#" not in out and "```" not in out
     assert "for example" in out
-    assert isinstance(T.is_available(), bool)
+    # (The pyttsx3 `is_available`/`speak` server-side path was removed — synthesis
+    # is now neural + client-played via /api/tts. `speech_markup` remains.)
 
 
 # ── 2E-36 pre-interview research ─────────────────────────────────────────────

@@ -89,6 +89,52 @@ def _path_ok(path: str) -> bool:
     return any(p.startswith(prefix) for prefix in _ALLOWED_PREFIXES)
 
 
+def _blob_user(token: str | None):
+    """Authenticate a blob request via a `?token=` query param (Image.network
+    can't send an Authorization header). Returns (uid, denied): denied is True
+    when auth is enforced and the token is missing/bad → the route 404s."""
+    from app.api.auth import authenticate_ws
+    uid, err = authenticate_ws(token)
+    return uid, (err is not None)
+
+
+async def _owns_blob(path: str, uid) -> bool:
+    """Whether `uid` owns a resource that references this blob (§10.1c) — so one
+    account can't fetch another's uploaded files/images even with a leaked path.
+    `uid` None (anonymous / auth-off) → allowed (byte-identical to today). The
+    blob key carries a unique UUID, so a LIKE match is unambiguous."""
+    from sqlalchemy import text
+
+    from storage.db import get_session_factory
+
+    if uid is None:
+        return True  # anonymous / device mode — no per-user gate
+    factory = get_session_factory()
+    if factory is None:
+        return True  # can't verify (store not ready) — don't hard-fail
+    pat = f"%{path}%"
+    # (table, WHERE the path is referenced) per allowed prefix.
+    if path.startswith("chat_images/") or path.startswith("documents/"):
+        sql = ("SELECT 1 FROM messages m JOIN sessions se ON m.session_id = se.id "
+               "WHERE se.user_id = :uid AND m.sources::text LIKE :pat LIMIT 1")
+    elif path.startswith("resumes/"):
+        sql = ("SELECT 1 FROM resumes WHERE user_id = :uid "
+               "AND file_path LIKE :pat LIMIT 1")
+    elif path.startswith("solve/"):
+        sql = ("SELECT 1 FROM solve_sessions WHERE user_id = :uid "
+               "AND image_path LIKE :pat LIMIT 1")
+    else:
+        return False
+    try:
+        async with factory() as s:
+            # documents/ can also be a generated-doc export owned via its session.
+            found = (await s.execute(
+                text(sql), {"uid": str(uid), "pat": pat})).scalar()
+            return found is not None
+    except Exception:  # noqa: BLE001 — never 500 the file path on a check error
+        return True
+
+
 def _ext(name: str) -> str:
     i = name.rfind(".")
     return name[i:].lower() if i >= 0 else ""
@@ -107,9 +153,12 @@ def _looks_texty(data: bytes) -> bool:
 
 
 @router.get("/blob")
-async def serve_blob(path: str = Query(...)):
+async def serve_blob(path: str = Query(...), token: str | None = Query(None)):
     """Stream a blob's raw bytes with a best-effort content type."""
     if not _path_ok(path):
+        return Response(status_code=404)
+    uid, denied = _blob_user(token)
+    if denied or not await _owns_blob(path, uid):  # owner-only (§10.1c)
         return Response(status_code=404)
     try:
         data = await get_blobs().get(path)
@@ -195,9 +244,13 @@ def _route(ext: str) -> tuple[str, str | None]:
 
 
 @router.get("/blob/preview")
-async def preview_blob(path: str = Query(...), name: str | None = Query(None)):
+async def preview_blob(path: str = Query(...), name: str | None = Query(None),
+                       token: str | None = Query(None)):
     """Classify a blob and return what the FE needs to render it in the panel."""
     if not _path_ok(path):
+        return JSONResponse({"kind": "error", "detail": "not found"}, status_code=404)
+    uid, denied = _blob_user(token)
+    if denied or not await _owns_blob(path, uid):  # owner-only (§10.1c)
         return JSONResponse({"kind": "error", "detail": "not found"}, status_code=404)
     fname = name or path
     ext = _ext(fname)

@@ -469,6 +469,7 @@ async def chat_upload_stream(
     depth: str | None = Form(None),
     instruction: str | None = Form(None),  # hidden model directive (not saved)
     difficulty: str | None = Form(None),  # manual effort override; None = auto
+    idempotency_key: str = Form(""),  # §3.4 dedup composed sends (retry/double-tap)
     passwords: str = Form("{}"),  # JSON {filename: password} for protected files
     files: list[UploadFile] = File(default=[]),
     session: AsyncSession = Depends(get_session),
@@ -1841,12 +1842,44 @@ async def chat_upload_stream(
             with contextlib.suppress(BaseException):
                 await agen.aclose()
 
+    # §3.4 idempotency: dedup on the client UUID so a retry / reconnect replay /
+    # double-tap can't create a duplicate turn or double-fire the pipeline. The
+    # claim happens HERE — after all pre-stream validation — so only a real turn
+    # start claims a key; the guard releases it if the turn errors before `done`
+    # (so a genuine retry proceeds) and marks it done on success (so a later
+    # duplicate short-circuits). Empty key (FE not sending one) → fully no-op.
+    from app.api import idempotency as _idem
+    _sse_headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    _idem_key = (idempotency_key or "").strip() or None
+    _is_new, _prior = _idem.claim(_idem_key)
+    if not _is_new:
+        async def _dup_stream():
+            payload = {"duplicate": True}
+            if _prior:
+                payload.update(_prior)
+            yield _sse("done", payload)
+        return StreamingResponse(_dup_stream(), media_type="text/event-stream",
+                                 headers=_sse_headers)
+
+    async def _guarded_generator():
+        completed = False
+        try:
+            async for chunk in event_generator():
+                if isinstance(chunk, str) and chunk.startswith("event: done"):
+                    completed = True
+                yield chunk
+        finally:
+            if completed:
+                _idem.complete(_idem_key, {})
+            else:
+                _idem.release(_idem_key)  # errored/cancelled → a retry can proceed
+
     return StreamingResponse(
-        event_generator(),
+        _guarded_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers=_sse_headers,
     )

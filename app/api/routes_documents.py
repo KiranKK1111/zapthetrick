@@ -32,6 +32,44 @@ from app.documents.generators import (
 router = APIRouter(prefix="/api")
 
 
+# ── ownership: generated documents are scoped via their session (§10.1c) ─────
+import uuid as _uuid
+
+
+async def _doc_uid():
+    from app.api.auth import resolve_user_id
+    return await resolve_user_id()
+
+
+async def _owns_session(s, session_id, uid) -> bool:
+    """Whether `session_id` belongs to the current user. NULL-owned (legacy)
+    sessions stay accessible; anonymous / auth-off → always allowed."""
+    if uid is None:
+        return True
+    from storage.models import Session as _SessionRow
+    try:
+        row = await s.get(_SessionRow, _uuid.UUID(str(session_id)))
+    except (ValueError, TypeError):
+        return False
+    return row is not None and (row.user_id is None or row.user_id == uid)
+
+
+async def _owns_doc_key(s, doc_key, uid) -> bool:
+    if uid is None:
+        return True
+    from sqlalchemy import select
+
+    from storage.models import GeneratedDocument
+    try:
+        sid = (await s.execute(
+            select(GeneratedDocument.session_id)
+            .where(GeneratedDocument.doc_key == _uuid.UUID(str(doc_key)))
+            .limit(1))).scalar()
+    except (ValueError, TypeError):
+        return False
+    return sid is not None and await _owns_session(s, sid, uid)
+
+
 class DocumentExportRequest(BaseModel):
     content: str = Field(..., description="Markdown / text to convert.")
     format: str = Field(..., description="md|txt|csv|xlsx|docx|pdf (+ aliases).")
@@ -48,6 +86,47 @@ class DocumentExportRequest(BaseModel):
                           "furniture (Table of Contents / Glossary / captions) — "
                           "code or name (see GET /api/documents/languages). "
                           "Omit or 'en' for English (default).")
+
+
+class SessionExportRequest(BaseModel):
+    """§3.12 session export — turn a whole conversation into a document."""
+    turns: list[dict] = Field(
+        default_factory=list,
+        description="Conversation turns [{role, content, topic?, question?, "
+                    "citations?}], chronological. Omit to fetch from "
+                    "`conversation_id` server-side.")
+    conversation_id: str | None = Field(
+        None, description="Fetch the turns for this conversation server-side "
+                          "when `turns` is empty (the client needn't gather "
+                          "them).")
+    mode: str = Field("chat", description="chat (topic segments) | live "
+                                          "(per-question report).")
+    title: str | None = Field(None, description="Optional document title.")
+    exec_summary: str | None = Field(
+        None, description="Executive summary for a LIVE report (ignored for chat).")
+    include_roles: list[str] | None = Field(
+        None, description="Scope: which roles to include (default user+assistant).")
+    topics: list[str] | None = Field(
+        None, description="Scope: only these topics (empty = all).")
+
+
+class SessionDebriefRequest(BaseModel):
+    """§4.17 assisted-session debrief — assemble the descriptive, private,
+    comp-excluded session map from the Live session's duck-typed data. All lists
+    optional; the client sends what the session surfaced."""
+    deliveries: list[dict] | None = Field(
+        None, description="Per-question delivery reads "
+                          "[{question, delivered_ratio, completed?, improvised?}].")
+    claims: list | None = Field(
+        None, description="The said-state: claims the candidate made (strings or "
+                          "[{text}]).")
+    situations: list | None = Field(
+        None, description="Situation sequence (strings or [{situation, confidence}]).")
+    panel: list[dict] | None = Field(
+        None, description="Panel roster [{id, role, turns}].")
+    topics: list[str] | None = Field(
+        None, description="Topics covered — drive the likely next-round follow-ups.")
+    title: str | None = Field(None, description="Optional document title.")
 
 
 def _check_template(template: str | None) -> str | None:
@@ -123,6 +202,8 @@ async def list_document_artifacts(session_id: str) -> dict:
         if factory is None:
             return {"artifacts": []}
         async with factory() as s:
+            if not await _owns_session(s, session_id, await _doc_uid()):
+                return {"artifacts": []}
             rows = await list_for_session(s, session_id)
             return {"artifacts": [_artifact_summary(r) for r in rows]}
     except Exception:  # noqa: BLE001
@@ -140,6 +221,8 @@ async def list_artifact_versions(doc_key: str) -> dict:
         if factory is None:
             return {"versions": []}
         async with factory() as s:
+            if not await _owns_doc_key(s, doc_key, await _doc_uid()):
+                return {"versions": []}
             rows = await list_versions(s, doc_key)
             return {"versions": [
                 {**_artifact_summary(r), "content_md": r.content_md}
@@ -175,6 +258,8 @@ async def diff_artifact_versions(
         if factory is None:
             raise HTTPException(503, detail="Document store is unavailable.")
         async with factory() as s:
+            if not await _owns_doc_key(s, doc_key, await _doc_uid()):
+                raise HTTPException(404, detail=f"No document {doc_key}.")
             rows = await list_versions(s, doc_key)
     except HTTPException:
         raise
@@ -230,6 +315,9 @@ async def artifact_staleness(doc_key: str) -> dict:
             return {"doc_key": str(doc_key), "latest_version": 0,
                     "formats": [], "stale_formats": [], "any_stale": False}
         async with factory() as s:
+            if not await _owns_doc_key(s, doc_key, await _doc_uid()):
+                return {"doc_key": str(doc_key), "latest_version": 0,
+                        "formats": [], "stale_formats": [], "any_stale": False}
             return await staleness_for_document(s, doc_key)
     except Exception:  # noqa: BLE001
         return {"doc_key": str(doc_key), "latest_version": 0,
@@ -248,6 +336,10 @@ async def search_document_artifacts(q: str,
         if factory is None:
             return {"results": []}
         async with factory() as s:
+            # A conversation-scoped search must be the caller's own conversation.
+            if session_id is not None and not await _owns_session(
+                    s, session_id, await _doc_uid()):
+                return {"results": []}
             return {"results": await search_documents(
                 s, q, session_id=session_id)}
     except Exception:  # noqa: BLE001
@@ -265,6 +357,8 @@ async def document_relationship_graph(session_id: str) -> dict:
         if factory is None:
             return {"documents": [], "edges": []}
         async with factory() as s:
+            if not await _owns_session(s, session_id, await _doc_uid()):
+                return {"documents": [], "edges": []}
             return await build_artifact_graph(s, session_id)
     except Exception:  # noqa: BLE001
         return {"documents": [], "edges": []}
@@ -534,6 +628,138 @@ async def verify_code_file(body: CodeVerifyRequest) -> dict:
                 "detail": f"{type(exc).__name__}: {exc}"[:300]}
 
 
+async def _fetch_conversation_turns(conversation_id: str) -> list[dict]:
+    """Load a conversation's messages as session-export turns [{role, content,
+    topic?, citations?}], chronological. Fail-open → [] (the endpoint then 400s
+    if the client also sent nothing)."""
+    try:
+        from sqlalchemy import select
+        from storage.db import get_session_factory
+        from storage.models import Message
+        factory = get_session_factory()
+        cid = _uuid.UUID(str(conversation_id))
+        if factory is None:
+            return []
+        async with factory() as s:
+            rows = (
+                await s.execute(
+                    select(Message)
+                    .where(Message.conversation_id == cid)
+                    .order_by(Message.created_at)
+                )
+            ).scalars().all()
+        turns: list[dict] = []
+        for m in rows:
+            content = (getattr(m, "content", "") or "").strip()
+            if not content:
+                continue
+            turn = {"role": getattr(m, "role", "") or "", "content": content}
+            src = getattr(m, "sources", None)
+            if isinstance(src, dict):
+                if src.get("topic"):
+                    turn["topic"] = src["topic"]
+                cites = src.get("citations")
+                if isinstance(cites, list) and cites:
+                    turn["citations"] = cites
+            turns.append(turn)
+        return turns
+    except Exception:  # noqa: BLE001
+        return []
+
+
+@router.post("/documents/session-export")
+async def session_export(body: SessionExportRequest) -> dict:
+    """Assemble a whole conversation into a session-export document (§3.12): a
+    cover + a hyperlinked TOC (chat → topic segments; live → per-question) + a
+    typographic body with footnote citations. Returns the assembled MARKDOWN,
+    which the client renders/downloads through the normal /documents/preview +
+    /documents/export flow (so every format + theme is reused).
+
+    Flag-gated (`documents.session_export`, default OFF → 404 guidance). Pure
+    assembly — no persistence; the client sends the visible transcript.
+    """
+    from app.core.config_loader import cfg
+    if not bool(getattr(cfg.documents, "session_export", False)):
+        raise HTTPException(
+            404, detail="Session export isn't enabled on this deployment.")
+    turns = list(body.turns or [])
+    # Server-side fetch: the client can just pass a conversation_id instead of
+    # gathering the transcript. Fail-open — a DB hiccup leaves `turns` as sent.
+    if not turns and body.conversation_id:
+        turns = await _fetch_conversation_turns(body.conversation_id)
+    if not turns:
+        raise HTTPException(400, detail="Nothing to export — no conversation turns.")
+    body = body.model_copy(update={"turns": turns})
+    try:
+        from app.documents import session_export as se
+        scope = se.ExportScope(
+            include_roles=(tuple(body.include_roles)
+                           if body.include_roles is not None
+                           else ("user", "assistant")),
+            topics=tuple(body.topics or ()),
+        )
+        export = se.build_export(
+            body.turns,
+            mode=(se.LIVE if (body.mode or "").strip().lower() == "live"
+                  else se.CHAT),
+            title=(body.title or "").strip(),
+            scope=scope,
+            exec_summary=(body.exec_summary or "").strip(),
+        )
+        markdown = se.to_markdown(export)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, detail=f"Could not assemble session export: {exc}")
+    return {
+        "markdown": markdown,
+        "title": export.title,
+        "mode": export.mode,
+        "segments": len(export.segments),
+        "has_exec_summary": bool(export.exec_summary),
+    }
+
+
+@router.post("/live/debrief")
+async def live_debrief(body: SessionDebriefRequest) -> dict:
+    """Assemble an assisted-session debrief (§4.17, Stage 11 D): a DESCRIPTIVE,
+    private, comp-excluded session map — delivery, the said-state claims ledger,
+    a situation replay, panel dynamics, and the likely next-round follow-ups. It
+    never scores or predicts an outcome. Returns the assembled MARKDOWN, which the
+    client opens in the document panel (the same doc-render path as export).
+
+    Flag-gated (`live.debrief`, default OFF → 404). Pure assembly — the client
+    sends the visible session data; no persistence.
+    """
+    from app.core.config_loader import cfg
+    if not bool(getattr(cfg.live, "debrief", False)):
+        raise HTTPException(
+            404, detail="Session debrief isn't enabled on this deployment.")
+    try:
+        from app.live import debrief as _db
+        d = _db.build_debrief(
+            deliveries=body.deliveries, claims=body.claims,
+            situations=body.situations, panel=body.panel, topics=body.topics)
+        markdown = _db.to_markdown(d)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, detail=f"Could not assemble the debrief: {exc}")
+    # `to_markdown` always emits the header + disclaimer, so "blank" means "no
+    # actual sections" — nothing was captured (or all of it was comp-excluded).
+    if not (d.delivery_map or d.claims or d.situations or d.panel
+            or d.follow_ups):
+        raise HTTPException(
+            400, detail="Nothing to debrief yet — run a session first.")
+    return {
+        "markdown": markdown,
+        "title": (body.title or "Session debrief").strip(),
+        "follow_ups": list(d.follow_ups),
+        "sections": {
+            "delivery": len(d.delivery_map),
+            "claims": len(d.claims),
+            "situations": len(d.situations),
+            "panel": len(d.panel),
+        },
+    }
+
+
 @router.post("/documents/preview")
 async def preview_document(body: DocumentPreviewRequest) -> dict:
     """Render the content to a PDF, then rasterize each page to a PNG.
@@ -790,6 +1016,45 @@ async def export_document(body: DocumentExportRequest) -> Response:
                 _val_meta["sandbox"] = _sbx
         except Exception:  # noqa: BLE001
             pass
+
+        # Stage-4 §3.3 visual-QA: after the structural re-open, rasterize the
+        # rendered PDF and have the resident VLM critique the pages against the
+        # requirement rubric (page count, missing sections, overflow). Advisory —
+        # rides X-Artifact-Validation as the honest "visually checked" note.
+        # Flag-gated + fail-open; PDF only (the format we rasterize directly). The
+        # vision call is injected here (api → vision) so `app.verify` stays
+        # vision-free.
+        if ext == "pdf":
+            try:
+                from app.core.config_loader import cfg as _cfg
+                if bool(getattr(_cfg.documents, "visual_qa", False)):
+                    from app.documents.rubric import extract_rubric
+                    from app.verify.visual_qa import visual_qa
+                    from app.vision.factory import describe_images
+                    _rub = extract_rubric(getattr(body, "title", None)
+                                          or body.content or "")
+                    _vqa = await visual_qa(
+                        data, _rub.checklist_text(),
+                        describe_fn=describe_images, page_hint=_rub.pages)
+                    # §3.3 repair loop: a HIGH-severity visual defect (missing
+                    # section, overflow, page-count miss) triggers a bounded
+                    # rewrite→re-render→re-check. Default 0 rounds (advisory
+                    # only). Fewest-issues bytes ship; fully fail-open.
+                    _vqa_rounds = int(getattr(
+                        _cfg.documents, "visual_qa_repair_rounds", 0))
+                    if (_vqa_rounds > 0 and _vqa.ran
+                            and not _vqa.ok and _vqa.blocking_issues):
+                        from app.verify.visual_qa import repair_visual_qa
+                        data, _vqa = await repair_visual_qa(
+                            body.content or "", data, _vqa,
+                            _rub.checklist_text(),
+                            render_fn=lambda c: _render(c, ext, _title)[0],
+                            describe_fn=describe_images,
+                            page_hint=_rub.pages, max_rounds=_vqa_rounds)
+                    if _val_meta is not None:
+                        _val_meta["visual_qa"] = _vqa.as_dict()
+            except Exception:  # noqa: BLE001
+                pass
 
     # NOTE: we deliberately do NOT persist a blob here. Export is stateless —
     # the source markdown already lives in the message, and both the preview and

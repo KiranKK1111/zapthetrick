@@ -291,6 +291,21 @@ def _emotion_signal(audio_np, utterance: str) -> tuple[dict | None, str]:
         return None, ""
 
 
+def _speaker_embedding(audio_np):
+    """OPTIONAL on-pod ECAPA-class speaker embedding for panel diarization
+    (§4.16). Returns a vector (list[float]) or None. The embedder is a heavy
+    audio model that lives only on the pod (`app/live/speaker_embed.py`); on the
+    dev box / when absent this returns None, and `panel.assign(None)` fail-softs
+    to a single interviewer. Never raises."""
+    try:
+        if audio_np is None:
+            return None
+        from app.live import speaker_embed as _se  # on-pod only
+        return _se.embed(audio_np)
+    except Exception:  # noqa: BLE001 — no embedder here → fail-soft single P1
+        return None
+
+
 def _apply_emotion(directive, extra: dict, cached) -> str | None:
     """Fold an advisory emotion signal into the answer metadata, and at most a
     SOFT tone hint into the answer directive. Returns the (possibly extended)
@@ -313,6 +328,41 @@ def _apply_emotion(directive, extra: dict, cached) -> str | None:
         return directive
 
 
+def _apply_situation(directive, extra: dict, interviewer_text: str,
+                     band: str = "") -> str | None:
+    """§4.15 situational intelligence + two-lane display. Classify the
+    interviewer situation (stress/harshness/conviction-trap/salary/rapport) and
+    fold its per-situation × band strategy in as TWO LANES:
+      * the DICTATABLE directive → shades the answer prompt (spoken);
+      * the GUIDANCE whisper chips → `extra['guidance']` ONLY (amber, never read
+        aloud) — the separation validator guarantees a chip never leaks into the
+        spoken answer.
+    Additive + fail-open: never gates a turn, never raises."""
+    try:
+        if not getattr(cfg.live, "situational", False):
+            return directive
+        from app.live import situational as _sit
+        emo = (extra.get("emotion") or {}).get("label") if extra else None
+        read = _sit.classify_situation(interviewer_text or "", emotion_label=emo)
+        if read.situation == _sit.NEUTRAL:
+            return directive
+        strat = _sit.strategy_for(read, band=band)
+        # GUIDANCE lane: build + validate the separation before surfacing.
+        display = _sit.build_display(directive or "", strat.chips)
+        ok, _ = _sit.validate_separation(display)
+        if ok and display.guidance:
+            extra["guidance"] = [c.to_dict() for c in display.guidance]
+        extra["situation"] = read.to_dict()
+        # DICTATABLE lane: the strategy directive shades the answer prompt.
+        if strat.directive:
+            return ((directive + "\n" + strat.directive).strip()
+                    if directive else strat.directive)
+        return directive
+    except Exception:  # noqa: BLE001
+        _layer_failed()
+        return directive
+
+
 def _coaching_tips(text: str) -> list[str]:
     """Candidate DELIVERY coaching (app/live/coach.py) for the candidate's own
     utterance — fillers / length / missing concrete example.
@@ -329,12 +379,96 @@ def _coaching_tips(text: str) -> list[str]:
         return []
 
 
+@router.websocket("/ws/voice")
+async def voice_ws(
+    websocket: WebSocket,
+    token: str | None = Query(default=None),
+):
+    """Chat VOICE MODE — streaming transcription with the SAME server-side Silero
+    VAD + adaptive turn-detection as the interview WS (`AudioStreamSegmenter`),
+    but it ONLY transcribes: the client drives the conversational answer + neural
+    TTS from the `transcript` frames. This replaces the naive client-side energy
+    VAD, so background noise never takes a turn and natural mid-sentence pauses
+    don't cut the user off (ChatGPT-style turn detection).
+
+    Up: raw int16 PCM (mono, 16 kHz) binary frames; JSON control {"type":"stop"|
+    "flush"}. Down: {"type":"ready"|"partial"|"transcript"|"error"}.
+    """
+    from app.api.auth import authenticate_ws
+    from storage.context import current_user_id_var
+    _uid, _err = authenticate_ws(token)
+    if _err is not None:
+        await websocket.close(code=1008)  # policy violation
+        return
+    if _uid:
+        current_user_id_var.set(str(_uid))
+    await websocket.accept()
+
+    _send_lock = asyncio.Lock()
+
+    async def _send(obj: dict) -> None:
+        try:
+            async with _send_lock:
+                await websocket.send_json(obj)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _on_utterance(text: str, full: str | None = None) -> None:
+        t = (text or "").strip()
+        if t:
+            await _send({"type": "transcript", "text": t})
+
+    async def _on_partial(text: str) -> None:
+        t = (text or "").strip()
+        if t:
+            await _send({"type": "partial", "text": t})
+
+    from app.audio.stream import AudioStreamSegmenter
+    segmenter = AudioStreamSegmenter(on_utterance=_on_utterance,
+                                     on_partial=_on_partial)
+    await _send({"type": "ready"})
+    try:
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if msg.get("bytes") is not None:
+                chunk = _decode_pcm(msg["bytes"])
+                if chunk is not None and chunk.size:
+                    await segmenter.push(chunk)
+                continue
+            txt = msg.get("text")
+            if txt:
+                try:
+                    ctrl = json.loads(txt)
+                except Exception:  # noqa: BLE001
+                    ctrl = {}
+                _t = str(ctrl.get("type") or "")
+                if _t in ("stop", "close"):
+                    break
+                if _t == "flush":
+                    try:
+                        await segmenter.flush()  # finalize the current utterance
+                    except Exception:  # noqa: BLE001
+                        pass
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        try:
+            await segmenter.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 @router.websocket("/ws/live")
 async def live_listen(
     websocket: WebSocket,
     resume_id: str | None = Query(default=None),
     session_id: str | None = Query(default=None),
     mode: str | None = Query(default=None),
+    token: str | None = Query(default=None),
 ):
     """Long-lived audio + Q&A WebSocket. One per Live Listen tab.
 
@@ -348,6 +482,20 @@ async def live_listen(
         DISABLED (in a solo test the same voice asks and reads answers aloud, so
         those would wrongly suppress). The is-question gate stays ON in both.
     """
+    # WS auth (§10.1c): the HTTP middleware doesn't see WS, so authenticate here
+    # via the ?token= query param. Enforced + bad/no token → refuse the socket.
+    # A valid token scopes the whole connection (+ its persistence) to that user.
+    from app.api.auth import authenticate_ws
+    from storage.context import current_user_id_var
+    _ws_uid, _ws_err = authenticate_ws(token)
+    if _ws_err is not None:
+        await websocket.close(code=1008)  # policy violation
+        return
+    if _ws_uid:
+        # Set for THIS task; contextvars propagate to spawned tasks, and the
+        # copy is discarded when the connection task ends (no reset needed).
+        current_user_id_var.set(str(_ws_uid))
+
     await websocket.accept()
     sid = session_id or str(uuid.uuid4())
     # Per-connection mode (query param wins; else the config default).
@@ -544,6 +692,21 @@ async def live_listen(
                 _is_echo, _esim = _echo.is_candidate_echo(
                     sid or "", utterance, _ethr)
                 if _is_echo:
+                    # §4.14 DELIVERY TRACKING: the candidate is reading our shown
+                    # answer aloud — that utterance IS the delivery. Fuzzy-align
+                    # spoken vs the matched displayed script so the said-state
+                    # (§4.8 claims ledger) reflects DELIVERED reality: an
+                    # interrupted read doesn't record its unspoken tail, and any
+                    # improvised off-script claim enters the envelope. Fail-open.
+                    try:
+                        from app.live import delivery as _deliv
+                        if _deliv.enabled():
+                            _script, _ = _echo.best_match(sid or "", utterance)
+                            if _script:
+                                _deliv.record_delivery(
+                                    sid or "", _script, utterance)
+                    except Exception:  # noqa: BLE001
+                        pass
                     await send({"type": "done", "qid": qid,
                                 "skipped": "candidate_echo",
                                 "echo_similarity": round(_esim, 3)})
@@ -755,8 +918,10 @@ async def live_listen(
         # Conversational depth (Phase 10): world-model + diarization + answer
         # revision + contradiction/temporal — all additive + fail-open.
         revision_qid = None
+        _panel_desc, _panel_speaker = None, None
         if getattr(cfg.live, "world_model", False) or getattr(cfg.live, "answer_revision", False) \
-                or getattr(cfg.live, "contradiction", False) or getattr(cfg.live, "diarization", False):
+                or getattr(cfg.live, "contradiction", False) or getattr(cfg.live, "diarization", False) \
+                or getattr(cfg.live, "panel_diarization", False):
             try:
                 from app.question_detection.context_tracker import get_tracker
                 tr = get_tracker(sid)
@@ -787,6 +952,21 @@ async def live_listen(
                     meta_role = role
                 else:
                     meta_role = None
+                # §4.16 PANEL DIARIZATION: cluster the interviewer VOICE (ECAPA
+                # embedding, on-pod) into a speaker slot P1/P2/P3 → per-speaker
+                # role + situation + attribution. Fail-soft: no embedder (dev) or
+                # no audio → a single P1 (today's single-interviewer). Additive.
+                if getattr(cfg.live, "panel_diarization", False) and is_audio:
+                    try:
+                        from app.live import panel as _panel
+                        _pd = _panel.for_tracker(tr)
+                        _slot = _pd.assign(_speaker_embedding(audio_np),
+                                           text=utterance, role=(meta_role or ""))
+                        if _pd.is_panel():
+                            _panel_desc = _pd.describe()
+                            _panel_speaker = _slot.id
+                    except Exception:  # noqa: BLE001
+                        _layer_failed()
                 # Answer revision: a reinterpretation targets the prior qid.
                 if getattr(cfg.live, "answer_revision", False) and wm is not None:
                     from app.live import revise as _rev
@@ -854,6 +1034,12 @@ async def live_listen(
             meta["detection_confidence"] = detection_conf
         if meta_role:
             meta["speaker"] = meta_role
+        # Panel diarization (§4.16) — the voice-cluster slot is the more precise
+        # speaker id; the panel roster is additive meta the FE renders as pills.
+        if _panel_speaker:
+            meta["speaker"] = _panel_speaker
+        if _panel_desc:
+            meta["panel"] = _panel_desc
         if challenge:
             meta["challenge"] = True
         if temporal_ref:
@@ -1592,6 +1778,15 @@ async def live_listen(
                         _emotion_surfaced = "emotion" in extra
                 except Exception:  # noqa: BLE001
                     _layer_failed()
+            # §4.15 SITUATIONAL INTELLIGENCE: read the interviewer situation from
+            # THIS utterance and fold its strategy in two lanes — the directive
+            # shades the spoken answer, the whisper chips go to meta.guidance
+            # only (never read aloud). Band = target seniority (falls back to
+            # real). Additive + non-blocking.
+            if getattr(cfg.live, "situational", False):
+                _band = (extra.get("target_band") or extra.get("seniority_band")
+                         or "") if isinstance(extra, dict) else ""
+                directive = _apply_situation(directive, extra, utterance, _band)
             # Live clarification (R59, carry-forward): when confidence is low,
             # surface a non-blocking hint the FE shows dismissibly (never pauses
             # the stream). Reuses the deliberation confidence — no extra call.
@@ -2024,9 +2219,21 @@ async def live_listen(
                 return
             from app.orchestration.sandbox import verify_snippet
             res = await verify_snippet(code, run_lang)
-            await send({"type": "meta", "qid": qid, "code_verify": {
-                "status": res.status, "language": run_lang,
-                "ran": bool(res.ran)}})
+            _cv_meta = {"status": res.status, "language": run_lang,
+                        "ran": bool(res.ran)}
+            # §4.4 two-lane gate — ride an advisory static Big-O cross-check +
+            # the honest reveal badge alongside the sandbox verdict. Flag-gated
+            # (`live.two_lane`) + fail-open; no effect on the verdict itself.
+            try:
+                from app.live import two_lane as _tl
+                if _tl.enabled():
+                    _note = _tl.complexity_note(code, run_lang)
+                    if _note:
+                        _cv_meta["complexity"] = _note
+                    _cv_meta["badge"] = _tl.reveal_badge(res.status, run_lang)
+            except Exception:  # noqa: BLE001
+                pass
+            await send({"type": "meta", "qid": qid, "code_verify": _cv_meta})
             if res.verified or res.status in ("unavailable", "disabled"):
                 return  # verified, or sandbox couldn't run it → keep the answer
             # 3) Compile/run failure → regenerate with the sandbox error.

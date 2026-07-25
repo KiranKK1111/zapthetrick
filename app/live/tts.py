@@ -50,29 +50,9 @@ def speech_markup(text: str) -> str:
         return (text or "").strip()
 
 
-def is_available() -> bool:
-    """Whether a local synthesis engine is importable. Never raises → False."""
-    try:
-        import importlib.util
-        return importlib.util.find_spec("pyttsx3") is not None
-    except Exception:  # noqa: BLE001
-        return False
+# NOTE: the old server-side pyttsx3 synthesis (`speak`/`is_available`) was
+# removed — it played a robotic SAPI voice on the SERVER host, not the client,
+# and is superseded by the neural client path (`tts_synth.py` → /api/tts → Edge
+# Neural / Kokoro). This module now owns only the speech-ready TEXT transform.
 
-
-def speak(text: str) -> bool:
-    """Best-effort local synthesis via pyttsx3 when installed. Returns True when
-    audio was produced, False otherwise (including when no engine is present —
-    never fakes success). Never raises."""
-    if not is_available():
-        return False
-    try:
-        import pyttsx3  # type: ignore
-        engine = pyttsx3.init()
-        engine.say(speech_markup(text))
-        engine.runAndWait()
-        return True
-    except Exception:  # noqa: BLE001
-        return False
-
-
-__all__ = ["speech_markup", "is_available", "speak"]
+__all__ = ["speech_markup"]

@@ -36,6 +36,15 @@ _MIN_PREFETCH_CHARS = 12
 _REUSE_SIMILARITY = 0.6
 
 
+def _input_warmup_enabled() -> bool:
+    """§3.10 input-warmup: pre-connect router candidates while the user types."""
+    try:
+        from app.core.config_loader import cfg
+        return bool(getattr(cfg.chat, "input_warmup", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def predictive_prefetch_enabled() -> bool:
     """`cfg.perceived.predictive_prefetch` — enabling default True. When on,
     `warm()` also precomputes the query embedding (and best-effort context) so
@@ -122,6 +131,16 @@ class PrefetchManager:
         except Exception:  # noqa: BLE001 — warming must never raise
             pass
         await self._warm_connection(pred)
+        # §3.10 input-warmup: also pre-connect the top-N router candidates the
+        # "auto" provider set (which the single-base warm above can't cover), so
+        # the real turn — and its hedge — fire on already-open connections.
+        # Fire-and-forget on its own flag; fail-open.
+        try:
+            if _input_warmup_enabled():
+                from app.llm import preconnect as _pre
+                asyncio.ensure_future(_pre.warm(force=True))
+        except Exception:  # noqa: BLE001 — warming must never raise
+            pass
         token = uuid.uuid4().hex
         entry = _Warm(token=token, prediction=pred, partial=(partial or "").strip())
         await self._prefetch_context(entry, retrieve)

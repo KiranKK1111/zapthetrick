@@ -288,7 +288,8 @@ class TestPlannerDecisionShape:
         assert isinstance(d, PlannerDecision)
         js = d.as_dict()
         assert set(js) == {"intent", "artifact_type", "source",
-                           "reuse_response", "requires_llm"}
+                           "reuse_response", "requires_llm",
+                           "confidence", "offer_artifact"}
         assert js["intent"] == "ARTIFACT_ONLY"
         assert C("Explain Kafka").wants_artifact is False
 

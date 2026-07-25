@@ -90,7 +90,9 @@ async def list_projects(archived: bool = False,
     )
     stmt = select(Project).where(Project.archived == archived)
     if uid is not None:
-        stmt = stmt.where((Project.user_id == uid) | (Project.user_id.is_(None)))
+        # Strictly this user's projects (§10.1c) — legacy NULL-owned projects are
+        # no longer shown to everyone (claim them via /api/auth/claim-legacy).
+        stmt = stmt.where(Project.user_id == uid)
     stmt = stmt.order_by(Project.updated_at.desc())
     rows = (await session.execute(stmt)).scalars().all()
     return {"projects": [

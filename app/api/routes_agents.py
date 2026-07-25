@@ -64,6 +64,45 @@ log = logging.getLogger(__name__)
 # archive / download the project. The app packages the answer into a real,
 # downloadable archive (a button appears below the message), so the model must
 # explain + emit the files rather than refuse with "I can't send a zip".
+_VOICE_DIRECTIVE = (
+    "VOICE CONVERSATION MODE — the user is TALKING with you and will HEAR your "
+    "reply spoken aloud. Respond exactly like a knowledgeable, warm person "
+    "talking out loud:\n"
+    "- PLAIN SPOKEN PROSE ONLY. No markdown, no headings, no bullet or numbered "
+    "lists, no tables, no code blocks, no links, no emojis — none of it can be "
+    "spoken. Never create a document, file, or download.\n"
+    "- Match length to the question. Casual chat or a simple question → 1-2 "
+    "sentences. A concept or a technical/CS/IT question (how something works, "
+    "an algorithm, a system-design idea, a definition, a trade-off) → EXPLAIN "
+    "it properly but CONVERSATIONALLY, the way a good engineer explains it out "
+    "loud to a colleague: walk through it in a few natural sentences, in plain "
+    "spoken English. Don't dump — teach.\n"
+    "- If code/formulas/tables are needed, DESCRIBE them in words (say the steps "
+    "or the shape of the code) rather than reciting syntax; offer that the full "
+    "written version is available in the text chat if they want it.\n"
+    "- Be human: answer anything — casual talk, advice, emotional support, "
+    "technical theory. Never say a topic is 'not your specialty' or out of "
+    "scope; just engage and help.\n"
+)
+
+
+def _voice_gender_note(gender: str | None) -> str:
+    """A gendered-grammar directive matching the speaking TTS voice, so replies
+    in gendered languages inflect the first person correctly."""
+    g = (gender or "").strip().lower()
+    if g not in ("female", "male"):
+        return ""
+    ex = ("करती/रही/सकती हूँ" if g == "female" else "करता/रहा/सकता हूँ")
+    return (
+        f"- YOUR VOICE IS {g.upper()}. You are speaking as a {g}. In gendered "
+        f"languages (Hindi, Marathi, Gujarati, Punjabi, and any language with "
+        f"gendered verbs/adjectives), inflect ALL first-person self-reference "
+        f"(verbs, adjectives, participles) as a {g} speaker and keep gender "
+        f"agreement correct throughout — e.g. in Hindi say '{ex}', not the "
+        f"other gender's form. English is unaffected.\n"
+    )
+
+
 _DOWNLOAD_DIRECTIVE = (
     "FILE DOWNLOAD CAPABILITY: This application automatically packages the "
     "project into a downloadable ZIP and shows a Download button directly "
@@ -601,6 +640,97 @@ async def _followup_commit(conversation_id: str | None, user_text: str,
 
 
 
+async def _try_patch_answer(
+    user_text: str, all_prior: list[dict], conversation_id: str | None,
+) -> str | None:
+    """Stage-4 §3.5 — patch-based follow-up edit.
+
+    When this turn edits the code the assistant JUST produced, ask the model for
+    surgical `str_replace` patches (schema-enforced §8.7) against the prior code
+    block and apply them exactly, then re-verify only the changed block through
+    the SAME sandbox path. Returns the revised answer text (the caller streams +
+    persists it like any turn), or ``None`` to fall through to a full mesh
+    regeneration — the §3.5 fallback — on ANY miss: feature off, not an edit, no
+    prior code, an invalid/empty patch payload, or a stale patch target.
+
+    Pure orchestration over `app.chat.code_patch` (the intent decision is the
+    SEMANTIC `code_edit_request` gate; application is exact string surgery).
+    Fail-open: never raises."""
+    try:
+        from app.chat import code_patch as _cp
+        if not _cp.enabled():
+            return None
+        # Target = the last assistant message's last substantial code block.
+        _prev_asst = next(
+            (m.get("content") or "" for m in reversed(all_prior)
+             if m.get("role") == "assistant" and (m.get("content") or "").strip()),
+            "")
+        _blk = _cp.extract_last_code_block(_prev_asst)
+        if not _blk:
+            return None
+        if not _cp.is_edit_request(user_text, has_prior_code=True):
+            return None
+        _code, _label = _blk
+
+        _sys = (
+            "You edit code with SURGICAL str_replace patches. Given the current "
+            "code and an edit request, return ONLY patches: each {old_str, "
+            "new_str} where old_str is an EXACT substring copied verbatim from "
+            "the current code (long enough to be unique) and new_str is its "
+            "replacement. Do NOT restate untouched code. Make the SMALLEST set "
+            "of patches that satisfies the request.")
+        _usr = (f"Edit request: {user_text}\n\n"
+                f"Current code ({_label or 'code'}):\n```\n{_code}\n```")
+        from app.core.structured import structured as _structured
+        _res = await _structured(
+            _cp.CODE_PATCH_SCHEMA,
+            [{"role": "system", "content": _sys},
+             {"role": "user", "content": _usr}],
+            tier="coder", name="patches", session_key=conversation_id)
+        if _res is None or not _res.valid or not isinstance(_res.obj, dict):
+            return None
+        _pr = _cp.apply_str_replace(_code, _res.obj.get("patches") or [])
+        if not _pr.applied:
+            return None                          # stale target → full regen
+
+        _fence = _label or ""
+        _answer = f"Updated the code:\n\n```{_fence}\n{_pr.code}\n```"
+        # Re-verify only the changed block through the SAME sandbox verify path
+        # (silent — a precomputed answer emits no stage frames), adopting the
+        # verified/repaired text + honest verdict suffix. Fail-open.
+        try:
+            from app.codeintel import code_verify as _cv
+            if _cv.enabled():
+                _lang = _cv.plan(_answer, question=user_text)
+                if _lang:
+                    _cvr = None
+                    async for _k, _p in _cv.verify_stream(
+                            user_text, _answer, language_label=_lang,
+                            is_cancelled=lambda: False):
+                        if _k == "result":
+                            _cvr = _p
+                    if _cvr is not None and _cvr.ran and _cvr.delta:
+                        _answer = _cvr.updated_text
+                    # §2.6 code-verify sink from the sandbox ground truth.
+                    if _cvr is not None and _cvr.ran and _cvr.suffix:
+                        _s = _cvr.suffix
+                        if ("✅" in _s or "⚠️" in _s):
+                            from app.llm import scorecards as _scc
+                            from app.llm.engine import get_last_route as _glr
+                            from app.llm.identity import identity_key as _ik
+                            _rt = _glr(conversation_id)
+                            if _rt:
+                                _scc.record_verify_outcome(
+                                    _ik(_rt[0], _rt[1]), "chat_code",
+                                    passed=("✅" in _s),
+                                    repaired=(_cvr.fixed_code is not None))
+        except Exception:  # noqa: BLE001 — verify never breaks the edit
+            pass
+        return _answer
+    except Exception:  # noqa: BLE001 — any failure → full regen fallback
+        return None
+
+
 def _build_registry() -> AgentRegistry:
     """Build the agent set from `cfg.agents.enabled`.
 
@@ -669,6 +799,36 @@ async def agents_stream(
             "error": f"Database setup failed: {err or 'see backend logs'}.",
         }.get(state, "Database not ready.")
         raise HTTPException(status_code=503, detail=msg)
+
+    # §3.4 idempotency: dedup this composed send BEFORE creating any rows, so a
+    # retry / reconnect replay / double-tap can't create a duplicate turn or
+    # double-fire the mesh. Empty key → no-op. (A reconnect normally resumes the
+    # buffered stream via replayPath rather than re-POSTing, so this mainly
+    # guards a duplicate initial POST.)
+    from app.api import idempotency as _idem
+    _idem_key = (body.idempotency_key or "").strip() or None
+    _idem_is_new, _idem_prior = _idem.claim(_idem_key)
+    if not _idem_is_new:
+        async def _idem_dup_stream():
+            import json as _json
+            _p = {"duplicate": True}
+            if _idem_prior:
+                _p.update(_idem_prior)
+            yield f"event: done\ndata: {_json.dumps(_p)}\n\n"
+        return StreamingResponse(
+            _idem_dup_stream(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                     "X-Accel-Buffering": "no"})
+
+    # §3.4 provider pre-connect: warm HTTP/2 pools to the providers the router
+    # will pick, so this turn's first request (and any hedge) fires on an open
+    # connection instead of paying the handshake. Fire-and-forget + debounced +
+    # fail-open (no-op when `resilience.pre_connect` is off).
+    try:
+        from app.llm import preconnect as _pre
+        _pre.schedule()
+    except Exception:  # noqa: BLE001
+        pass
 
     # Resolve / create the conversation row up front so the meta event
     # can include its id, same as /api/chat/stream.
@@ -757,12 +917,15 @@ async def agents_stream(
     # Explicit Stop signal (the FE's HTTP client can't abort a request in-flight,
     # so it POSTs /conversations/{id}/cancel). Clear any STALE flag from a prior
     # turn so this one isn't killed at birth; the stream loop polls it.
-    from app.api.replay import (
-        is_cancelled as _is_cancelled, clear_cancel as _clear_cancel)
-    _clear_cancel(conversation_id)
+    from app.api.replay import is_cancelled as _is_cancelled
+    from app.api import cancel_scope as _cscope
+    # §4.5: clear any stale flag AND drop a stale scope from a prior turn so this
+    # one isn't killed at birth; lanes register in scope_for(conversation_id).
+    _cscope.clear(conversation_id)
+    _turn_scope = _cscope.scope_for(conversation_id)
 
     def _stream_cancelled() -> bool:
-        return _is_cancelled(conversation_id)
+        return _is_cancelled(conversation_id) or _turn_scope.cancelled
 
     # Flag the assistant turn as a document ONLY when the user explicitly asked
     # to generate one — in THIS message OR the immediately preceding
@@ -1123,6 +1286,16 @@ async def agents_stream(
 
     _is_build_request = _is_build_req_fn(user_text)
 
+    # §10 VOICE MODE: a spoken conversation. Everything visual/heavy is off — no
+    # documents, no archives, no project builds, no code/tables/lists (they can't
+    # be spoken). Force the deliverable flags off; the persona adds a concise
+    # spoken-style directive (below). Text chat is unaffected.
+    _is_voice = bool(getattr(body, "voice", False))
+    if _is_voice:
+        _wants_download = False
+        _wants_doc_file = False
+        _is_build_request = False
+
     # Explicit performance/complexity constraints in a code request ("within
     # 500ms", "worst case", "O(1) space") become a hard requirement directive.
     from app.chat.perf_constraints import extract_performance_constraints
@@ -1153,10 +1326,31 @@ async def agents_stream(
     # difficulty, task category, implicit topic-shift, capabilities, output
     # complexity. Gated (`understanding.enabled`); its embedding is remembered
     # per-conversation so the NEXT turn can detect a topic-shift by distance.
+    # §3.10 fast lane: a trivial turn (greeting/ack — decided SEMANTICALLY by the
+    # difficulty classifier's `trivial_turn` gate) skips the pre-mesh enrichment
+    # it can't use — the understanding pass (embedding + intent disambiguation),
+    # the topic-policy classifier, user-model inference, memory-graph retrieval,
+    # and episodic recall (all embedding / vector-search work a "hi" can't
+    # benefit from) — for a snappier reply. The Supervisor STILL answers (so the
+    # persona voice, safety guards, and response shaping are never bypassed — a
+    # greeting deserves the same voice); the fast lane only sheds the enrichment
+    # LAYERS around it, not the mesh itself. Flag-gated (`chat.fast_lane`) +
+    # fail-open; off → every layer runs exactly as before.
+    _skip_enrich = False
+    try:
+        from app.chat.fast_lane import enabled as _fl_on
+        # Voice turns ALWAYS skip the pre-mesh enrichment (understanding pass,
+        # memory/RAG retrieval, topic-policy, user-model) — a spoken reply needs
+        # to start FAST, not wait on embedding/vector work. Text chat keeps the
+        # trivial-only fast lane.
+        _skip_enrich = _is_voice or (_fl_on() and _difficulty == TRIVIAL)
+    except Exception:  # noqa: BLE001
+        _skip_enrich = _is_voice
+
     _understanding = None
     try:
         from app import understanding as _u
-        if _u.enabled():
+        if _u.enabled() and not _skip_enrich:
             # Bounded: the embedder runs off-loop with a hard 2s SLA so a slow
             # (cold-loading) model can never stall the P0 slot.
             _understanding = await asyncio.wait_for(
@@ -1198,6 +1392,24 @@ async def agents_stream(
         # Brain's difficulty when it's confident and no UI/build override applies.
         _difficulty = _understanding.difficulty
 
+    # §8.2 Adaptive effort dial: unify the turn's effort knobs — tier, thinking
+    # budget, best-of-N, judge, reasoning-route — into ONE coherent profile,
+    # chosen from the (now-final) difficulty and shaded by the reasoning mode
+    # (`depth`: tldr→down, deeper/exhaustive→up). The persona reads it to add a
+    # thinking-summary directive on escalated turns; the envelope carries it for
+    # observability; an escalated turn also emits a calm `effort` frame so the
+    # user sees the model is thinking harder. Flag-gated (`llm.effort_dial`) +
+    # fail-open — OFF → `_effort_profile` stays None and the per-knob path is
+    # byte-identical.
+    _effort_profile = None
+    try:
+        from app.llm import effort as _effort_mod
+        if _effort_mod.enabled():
+            _effort_profile = _effort_mod.effort_for(
+                _difficulty, mode=getattr(body, "depth", None))
+    except Exception:  # noqa: BLE001 — the dial must never break a turn
+        _effort_profile = None
+
     extras_base: dict = {
         "session_id": session_id,
         "conversation_id": conversation_id,
@@ -1207,6 +1419,17 @@ async def agents_stream(
         "history_summary": history_summary,
         # trivial|standard|hard|expert — drives capability-aware model routing.
         "difficulty": _difficulty,
+        # §8.2 effort profile (or None when the dial is off) — the persona folds
+        # a thinking-summary directive from it on escalated turns.
+        "effort": _effort_profile.as_dict() if _effort_profile else None,
+        # §10 spoken-style directive for a voice turn (empty for text chat), plus
+        # a gendered-grammar note matching the speaking voice.
+        "voice_directive": (_VOICE_DIRECTIVE
+                            + _voice_gender_note(getattr(body, "voice_gender", None))
+                            if _is_voice else ""),
+        # §10 voice turn flag → the Supervisor runs the persona ONLY (skips the
+        # RAG/grounder/critic mesh) for a near-instant spoken reply.
+        "voice": _is_voice,
         # Non-empty when the turn asks to zip/archive/download the project —
         # tells the answering model to explain + emit files, not refuse. For a
         # single-document request (pdf/word/excel/…) the doc directive tells it
@@ -1557,7 +1780,10 @@ async def agents_stream(
     # Personalization + governance (personalization-and-governance R2/R4).
     # Flag-gated + fail-open + additive; safety guards already ran upstream and
     # keep precedence — the policy gate only ADDS caution. No second LLM call.
-    if getattr(cfg.personalization, "topic_policy", False):
+    # §3.10 fast lane: a trivial turn (greeting/ack) carries no risk to classify —
+    # skip the policy embedding it can't use. `_skip_enrich` is the semantic
+    # trivial-turn verdict computed above; off → unchanged.
+    if getattr(cfg.personalization, "topic_policy", False) and not _skip_enrich:
         try:
             from app.personalization.policy import classify as _risk_classify
             from app.personalization.policy import strategy_for as _risk_strategy
@@ -1571,7 +1797,8 @@ async def agents_stream(
                     _policy_meta = {"risk": _risk}
         except Exception as _pexc:  # noqa: BLE001
             log.info("topic policy skipped: %s", _pexc)
-    if getattr(cfg.personalization, "user_model_enabled", False):
+    if getattr(cfg.personalization, "user_model_enabled", False) \
+            and not _skip_enrich:
         try:
             from app.personalization.user_model import infer as _um_infer
             from app.personalization.adapt import adapt_signals as _um_adapt
@@ -1596,7 +1823,8 @@ async def agents_stream(
     _memory_meta: dict = {}
     _mems: list = []   # recalled memory items — reused for memory_graph suggestions
     if (getattr(cfg.memory, "graph_enabled", False)
-            and getattr(cfg.memory, "inject_into_context", False)):
+            and getattr(cfg.memory, "inject_into_context", False)
+            and not _skip_enrich):
         try:
             from app.memory.mstore import memory_store
             from app.memory.retriever import relevant
@@ -1621,10 +1849,14 @@ async def agents_stream(
     # related prior questions the user could resume → memory_graph suggestions.
     # Recalled here (clean request session, before the mesh's work_session).
     _episode_threads: list = []
-    if getattr(cfg.memory, "episodic_enabled", False):
+    if getattr(cfg.memory, "episodic_enabled", False) and not _skip_enrich:
         try:
             from app.memory.episodic import search_episodes_similar
-            _eps = await search_episodes_similar(session, user_text, top_k=4)
+            # Scope recall to THIS user's memory collection (§10.1c) — same
+            # user_id the write path uses, so reads hit the right collection.
+            _eps = await search_episodes_similar(
+                session, user_text,
+                user_id=extras_base.get("user_id"), top_k=4)
             _episode_threads = [
                 {"question": getattr(e, "question", ""),
                  "intent": getattr(e, "intent", None)}
@@ -1648,6 +1880,19 @@ async def agents_stream(
             "meta",
             {"conversation_id": conversation_id, "session_id": session_id},
         )
+        # §8.2 effort dial: when the dial escalated this turn (a thinking budget,
+        # best-of-N, or a reasoning route), emit a calm `effort` frame BEFORE the
+        # first token so the user sees the model is thinking harder. Additive +
+        # optional; off / non-escalated → no frame, legacy clients ignore it.
+        if _effort_profile is not None and _effort_profile.escalated:
+            yield _sse("effort", {
+                "status": "thinking",
+                "tier": _effort_profile.tier,
+                "escalate": _effort_profile.escalate,
+                "note": ("Thinking carefully"
+                         if not _effort_profile.reasoning
+                         else "Reasoning through this"),
+            })
         # Follow-up interpretation (R11): additive + optional. Only when the
         # engine produced meta AND surfacing is enabled. Legacy clients ignore
         # the extra `interpretation` event entirely (Property 11).
@@ -1693,6 +1938,10 @@ async def agents_stream(
         intent_payload: dict = {}
         tools_called: list[str] = []
         latency_ms = 0
+        # §3.5 toolchain prefetch — fire once, the first time a fenced code block
+        # opens with a language tag, so the verifier's runtime warms while the
+        # rest of the answer is still streaming. Flag-gated + best-effort.
+        _tc_prefetched = False
 
         # ── Perceived-speed wiring (all flag-gated; OFF = unchanged) ─────────
         import time as _time
@@ -1819,11 +2068,17 @@ async def agents_stream(
         if _wants_download and _has_prior_code and (
                 _archive_fmt_named or _skip_clarify):
             _dl_fmt = _archive_fmt or "zip"   # default to zip if unspecified
-            # Visible, ordered progress steps while we package.
+            # Visible, ordered progress steps while we package. §5.3: emit the
+            # typed stage schema (id/label/state/ts) so the FE state machine can
+            # dedup by id, while keeping the legacy `name` field so the current
+            # renderer is unaffected.
+            from app.response_arch.stage_protocol import from_legacy as _stage_ev
             for _step in ("Collecting project files",
                           "Building directory structure",
                           f"Creating {_dl_fmt.upper()} archive"):
-                yield _sse("stage", {"name": _step})
+                _ev = _stage_ev(_step)
+                _ev["name"] = _step
+                yield _sse("stage", _ev)
                 await asyncio.sleep(0.5)
             # Compose an accurate brief from the project already in the thread.
             _proj = "\n\n".join(
@@ -1908,6 +2163,31 @@ async def agents_stream(
                         doc_pending_sent=_doc_pending_sent):
                     yield _frame
                 return
+
+        # ── Stage-4 §3.5 patch-based edit fast-path ─────────────────────────
+        # "now add error handling" against the code we JUST produced becomes a
+        # set of surgical str_replace patches applied to the prior code block —
+        # a ~2-3s targeted edit instead of a ~10s full regeneration, and code the
+        # user didn't ask to touch can't silently mutate. On a patch MISS (stale
+        # target, not an edit, no prior code, feature off) we fall straight
+        # through to the normal mesh below. Flag-gated (`code_solver.patch_edits`)
+        # + fail-open. Runs BEFORE the answer cache: an edit must never be served
+        # a cached copy of the pre-edit answer.
+        _patch_answer = None
+        with contextlib.suppress(Exception):
+            _patch_answer = await _try_patch_answer(
+                user_text, all_prior, conversation_id)
+        if _patch_answer:
+            _cstep = 240
+            for _ci in range(0, len(_patch_answer), _cstep):
+                yield _sse("token", {"text": _patch_answer[_ci:_ci + _cstep]})
+            with contextlib.suppress(Exception):
+                await _save_assistant(_patch_answer, incomplete=False)
+            yield _sse("done", {
+                "message_id": None, "episode_id": None,
+                "latency_ms": 0, "patched": True,
+            })
+            return
 
         # ── Answer reuse cache (R14/R21) — serve before generating ──────────
         # A previously-generated, revalidated answer for the SAME prompt (per-
@@ -2118,6 +2398,20 @@ async def agents_stream(
                                                 (_time.monotonic() - _t0) * 1000.0,
                                             )
                                 collected.append(text)
+                                # §3.5 one-shot toolchain prefetch on the first
+                                # fenced code block (only pay the join+scan while
+                                # a backtick is present and we haven't fired yet).
+                                if not _tc_prefetched and "`" in text:
+                                    try:
+                                        from app.sandbox import pool as _pool
+                                        if _pool.prefetch_enabled():
+                                            _lang = _pool.first_fence_language(
+                                                "".join(collected))
+                                            if _lang:
+                                                _pool.prefetch_toolchain(_lang)
+                                                _tc_prefetched = True
+                                    except Exception:  # noqa: BLE001
+                                        _tc_prefetched = True  # don't retry
                                 chunk = _coalescer.push(text)
                                 if chunk:
                                     yield _sse("token", {"text": chunk})
@@ -2270,6 +2564,60 @@ async def agents_stream(
                 except Exception:  # noqa: BLE001
                     pass
 
+                # Stage-4 §3.1: verify-while-streaming for chat code. The draft
+                # is already on screen (Chat reveals first), so sandbox-verify the
+                # code CONCURRENTLY and append an honest verdict — hot-swapping a
+                # repaired block on failure. Flag-gated (`code_solver.
+                # verify_chat_code`) + fail-open — it never blocks or breaks a turn.
+                try:
+                    from app.codeintel import code_verify as _cv
+                    if _cv.enabled() and not _stream_cancelled():
+                        _cv_lang = _cv.plan(full_text, question=user_text)
+                        if _cv_lang:
+                            from app.sandbox import docker_exec as _cvdex
+                            # Tag sandbox execs so Stop kills them (captured by the
+                            # ensure_future inside verify_stream).
+                            _cvdex.run_group.set(conversation_id)
+                            _cv_res = None
+                            async for _k, _p in _cv.verify_stream(
+                                    user_text, full_text,
+                                    language_label=_cv_lang,
+                                    is_cancelled=_stream_cancelled,
+                                    cancel_sandbox=lambda: _cvdex.cancel_group(
+                                        conversation_id)):
+                                if _k == "stage":
+                                    yield _sse("stage", {"name": _p})
+                                elif _k == "result":
+                                    _cv_res = _p
+                            if _cv_res is not None and _cv_res.ran and _cv_res.delta:
+                                full_text = _cv_res.updated_text
+                                yield _sse("token", {"text": _cv_res.delta})
+                            # §2.6 code-verify sink — feed the (model-identity,
+                            # chat_code) scorecard from the sandbox's ground truth
+                            # so the router learns which models' code actually
+                            # compiles. ✅ = pass, ⚠️ = fail(+repair), ℹ️ (not
+                            # executed) is not a pass/fail signal → skipped.
+                            if _cv_res is not None and _cv_res.ran and _cv_res.suffix:
+                                _s = _cv_res.suffix
+                                if "✅" in _s or "⚠️" in _s:
+                                    try:
+                                        from app.llm import scorecards as _scc
+                                        from app.llm.engine import (
+                                            get_last_route as _glr)
+                                        from app.llm.identity import (
+                                            identity_key as _ik)
+                                        _rt = _glr(conversation_id)
+                                        if _rt:
+                                            _scc.record_verify_outcome(
+                                                _ik(_rt[0], _rt[1]), "chat_code",
+                                                passed=("✅" in _s),
+                                                repaired=(_cv_res.fixed_code
+                                                          is not None))
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                except Exception:  # noqa: BLE001 — verify never breaks a turn
+                    pass
+
                 # A mid-stream provider drop is caught by the Persona agent,
                 # which leaves an inline error marker — treat that as an
                 # interrupted (resumable) turn too.
@@ -2308,6 +2656,26 @@ async def agents_stream(
                     log.info("intent-profile[%s]: doc suppressed (not eligible)",
                              _profile.intent)
                     _doc_meta = None
+                # Stage-4 §3.8 deliverable engine: when the answer stayed INLINE
+                # (no file generated) but the output is an artifact BY NATURE,
+                # offer a one-tap file; when the prompt named MULTIPLE
+                # deliverables, offer a picker. Flag-gated + fail-open — purely
+                # additive SSE the FE renders as chips; the answer is unchanged
+                # (explicit-only preserved — nothing is auto-generated here).
+                if _doc_meta is None:
+                    try:
+                        from app.documents import intent as _di
+                        if bool(getattr(cfg.documents, "deliverable_engine",
+                                        False)):
+                            _choices = _di.detect_deliverables(user_text)
+                            if _choices:
+                                yield _sse("deliverable_choices",
+                                           {"choices": _choices})
+                            elif _planner.offer_artifact:
+                                yield _sse("deliverable_offer",
+                                           {"format": _planner.offer_artifact})
+                    except Exception:  # noqa: BLE001
+                        pass
                 # Phase 5 — persist the generated document as a versioned
                 # artifact (evolution timeline + incremental edits). FAIL-OPEN +
                 # best-effort: opens its own session; any error is swallowed and
@@ -2518,6 +2886,32 @@ async def agents_stream(
                                 _trace["evidence_trust"] = _grounding.get("trust", 0.0)
                                 if _conflicts:
                                     _trace["conflicts"] = len(_conflicts)
+                    # §8.3 span citations: now that the answer is complete AND the
+                    # retrieved+reranked chunks sit on this turn's board, ground
+                    # each claim in `full_text` to the chunk + exact quote span that
+                    # supports it, and fold {claim_span, doc, quote_span} marks into
+                    # grounding.citations — the FE renders tappable ¹²³ source marks.
+                    # Flag-gated (advanced_rag.span_citations) + fail-open; off →
+                    # no citations key (byte-identical grounding).
+                    with contextlib.suppress(Exception):
+                        from app.rag import citations as _cites
+                        if _cites.enabled():
+                            _cchunks = supervisor.retrieved_chunks()
+                            _spans = _cites.build_citations(full_text, _cchunks)
+                            _cite_block = _cites.grounding_citations(_spans)
+                            if _cite_block:
+                                _grounding = {**(_grounding or {}), **_cite_block}
+                                _trace["span_citations"] = len(_spans)
+                    # §10.5 TTS lane: the spoken form of the answer (code/tables/
+                    # diagrams announced as "on screen", markdown stripped) so the
+                    # FE reads a natural sentence stream, not raw markdown. Carried
+                    # in envelope meta; the FE speaks it on demand. Flag-gated
+                    # (voice.tts) + fail-open — off → no speech_text (text-only).
+                    _speech_text = None
+                    with contextlib.suppress(Exception):
+                        from app.live import tts_lane as _ttsl
+                        if _ttsl.enabled() and full_text.strip():
+                            _speech_text = _ttsl.to_spoken(full_text) or None
                     # Verify the produced answer against the turn's extracted
                     # output constraints (chat-side constraint gate).
                     if _turn_state is not None:
@@ -2536,6 +2930,9 @@ async def agents_stream(
                         conversation_id=conversation_id,
                         intent={"type": intent_label} if intent_label else None,
                         difficulty=_difficulty,
+                        effort=(_effort_profile.as_dict()
+                                if _effort_profile else None),
+                        speech_text=_speech_text,
                         incomplete=bool(incomplete),
                         document=_doc_meta,
                         suggestions=_sugg,

@@ -53,6 +53,13 @@ class PlannerDecision:
     source: str = SOURCE_NEW
     reuse_response: bool = False          # render prior answer verbatim (no LLM)
     requires_llm: bool = True
+    # Stage-4 §3.8 — confidence that an artifact is wanted (explicit ≈ 0.9;
+    # borderline artifact-by-nature ≈ 0.5; plain chat = 0.0), and, for a
+    # borderline turn, the format to offer via a one-tap chip ("📄 Get this as a
+    # docx"). The turn still answers INLINE (explicit-only preserved) — the chip
+    # only OFFERS the file, running §3.3 on the already-written content on tap.
+    confidence: float = 1.0
+    offer_artifact: str | None = None
 
     @property
     def wants_artifact(self) -> bool:
@@ -65,6 +72,8 @@ class PlannerDecision:
             "source": self.source,
             "reuse_response": self.reuse_response,
             "requires_llm": self.requires_llm,
+            "confidence": self.confidence,
+            "offer_artifact": self.offer_artifact,
         }
 
 
@@ -114,6 +123,85 @@ _NEW_SUBJECT_RE = re.compile(
     r"(?!this\b|that\b|it\b|the\s+above\b)\w+",
     re.I,
 )
+
+# Stage-4 §3.8 — nouns that ARE a deliverable by nature (the FILE column of the
+# §3.8 table): the output is a standalone artifact a user keeps/sends/submits,
+# not a conversational answer. Each maps to the format a user most expects. Only
+# UNAMBIGUOUS artifacts are here — ambiguous nouns (summary, plan, outline,
+# report) stay chat so the offer-chip never nags on an ordinary answer. Ordered:
+# more specific phrases first (so "cover letter" beats a bare "letter").
+_DELIVERABLE_NOUNS: tuple[tuple[str, str], ...] = (
+    ("cover letter", "pdf"),
+    ("resume", "pdf"), ("résumé", "pdf"), (" cv", "pdf"),
+    ("curriculum vitae", "pdf"),
+    ("blog post", "md"), ("blog article", "md"),
+    ("presentation", "pptx"), ("slide deck", "pptx"), ("slideshow", "pptx"),
+    ("powerpoint", "pptx"),
+    ("invoice", "pdf"), ("contract", "pdf"), ("proposal", "pdf"),
+    ("white paper", "pdf"), ("whitepaper", "pdf"),
+    ("newsletter", "pdf"), ("brochure", "pdf"), ("flyer", "pdf"),
+    ("essay", "md"), ("article", "md"),
+    ("business plan", "pdf"),
+)
+
+
+# Verbs that make the deliverable noun the SUBJECT of an inline answer, not the
+# output to produce — "summarize this contract" / "review my resume" is an
+# answer ABOUT the artifact, never a new file (the §3.8 inline column). When one
+# is present the offer-chip is suppressed so it never nags on an analysis turn.
+_INLINE_VERB_RE = re.compile(
+    r"\b(summariz\w*|summaris\w*|explain\w*|describ\w*|analyz\w*|analys\w*|"
+    r"review\w*|compar\w*|critiqu\w*|discuss\w*|evaluat\w*|assess\w*|"
+    r"understand|outline|what\s+is|what's|what\s+are|tell\s+me\s+about|"
+    r"help\s+me\s+understand|give\s+me\s+a\s+summary)\b",
+    re.I,
+)
+
+
+def _is_analysis_request(text: str) -> bool:
+    return bool(_INLINE_VERB_RE.search(text or ""))
+
+
+def deliverable_nouns(text: str) -> list[tuple[str, str]]:
+    """Every DISTINCT artifact-by-nature noun present in `text`, as (noun, fmt),
+    in first-appearance order. A longer phrase suppresses a shorter one it
+    contains ("cover letter" hides "letter"; "blog post" is one item)."""
+    low = f" {(text or '').lower()} "
+    found: list[tuple[str, str]] = []
+    claimed_spans: list[tuple[int, int]] = []
+    # Longest phrases first so a specific phrase claims its span.
+    for noun, fmt in sorted(_DELIVERABLE_NOUNS, key=lambda p: -len(p[0])):
+        start = low.find(noun)
+        if start < 0:
+            continue
+        end = start + len(noun)
+        if any(s <= start < e or s < end <= e for s, e in claimed_spans):
+            continue
+        claimed_spans.append((start, end))
+        found.append((noun.strip(), fmt))
+    # Restore first-appearance order for a stable, user-legible picker.
+    found.sort(key=lambda nf: low.find(nf[0]))
+    return found
+
+
+def detect_deliverables(text: str) -> list[dict]:
+    """The multi-deliverable picker's candidate set (§3.8): ``[{noun, format}]``
+    for each distinct artifact-by-nature noun. Empty when none / just one — the
+    picker only appears for a genuinely PLURAL request."""
+    if _is_analysis_request(text):
+        return []                         # "summarize the resume and the report"
+    got = deliverable_nouns(text)
+    if len(got) < 2:
+        return []
+    return [{"noun": n, "format": f} for n, f in got]
+
+
+def _engine_on() -> bool:
+    try:
+        from app.core.config_loader import cfg
+        return bool(getattr(cfg.documents, "deliverable_engine", False))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def classify_artifact_intent(
@@ -175,7 +263,18 @@ def classify_artifact_intent(
     # ZapTheTrick's explicit-only policy that a file requires a named format/
     # export verb (the fix for repeated unrequested-PDF reports).
     if not det and not _export:
-        return PlannerDecision(ArtifactIntent.CHAT)
+        # Stage-4 §3.8 borderline: the output is an artifact BY NATURE (a resume,
+        # cover letter, blog post…) but no file/format was named. Stay CHAT
+        # (explicit-only preserved — NO auto-file) yet surface a one-tap offer so
+        # a genuinely-a-deliverable answer isn't stranded inline. Gated by the
+        # deliverable engine; off → today's silent CHAT.
+        if _engine_on() and not _is_analysis_request(t):
+            nouns = deliverable_nouns(t)
+            if nouns:
+                return PlannerDecision(
+                    ArtifactIntent.CHAT, confidence=0.5,
+                    offer_artifact=nouns[0][1])
+        return PlannerDecision(ArtifactIntent.CHAT, confidence=0.0)
 
     fmt = det_fmt if det else "zip"     # an export-verb-only ask packages as zip
     src = SOURCE_LAST_RESPONSE if has_prior_content else SOURCE_NEW
@@ -186,7 +285,8 @@ def classify_artifact_intent(
     if _PRODUCE_VERB_RE.search(low) and _NEW_SUBJECT_RE.search(low):
         return PlannerDecision(
             ArtifactIntent.ANSWER_AND_ARTIFACT, fmt,
-            source=SOURCE_NEW, reuse_response=False, requires_llm=True)
+            source=SOURCE_NEW, reuse_response=False, requires_llm=True,
+            confidence=0.9)
 
     # 4) ARTIFACT_ONLY — package what's already here ("generate a PDF", "export
     #    this", "as a word doc", "zip the project"). Reuse the last response with
@@ -194,10 +294,11 @@ def classify_artifact_intent(
     return PlannerDecision(
         ArtifactIntent.ARTIFACT_ONLY, fmt,
         source=src, reuse_response=has_prior_content,
-        requires_llm=not has_prior_content)
+        requires_llm=not has_prior_content, confidence=0.9)
 
 
 __all__ = [
     "ArtifactIntent", "PlannerDecision", "classify_artifact_intent",
+    "deliverable_nouns", "detect_deliverables",
     "SOURCE_LAST_RESPONSE", "SOURCE_NEW", "SOURCE_EXISTING",
 ]

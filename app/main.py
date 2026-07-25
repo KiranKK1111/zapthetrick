@@ -19,6 +19,19 @@ or:
 # chain can transitively pull chromadb in.
 import os as _os
 
+# Load a local `.env` (if present) so ZAPTHETRICK_AUTH_SECRET / ZAPTHETRICK_AUTH_MODE
+# / GOOGLE_OAUTH_* etc. can live in a file during local dev. `override=False` means
+# a REAL environment variable (e.g. a RunPod template env var) always wins over the
+# file — so the same config works locally (.env) and on RunPod (template env).
+try:
+    from pathlib import Path as _Path
+
+    from dotenv import load_dotenv as _load_dotenv
+
+    _load_dotenv(_Path(__file__).resolve().parents[1] / ".env", override=False)
+except Exception:  # noqa: BLE001 — a missing .env / dotenv is never fatal
+    pass
+
 _os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 _os.environ.setdefault(
     "CHROMA_TELEMETRY_IMPL",
@@ -79,6 +92,7 @@ from app.core.update_check import APP_VERSION
 from app.middleware.selective_gzip import SelectiveGZipMiddleware
 
 from app.api.routes_agent_approvals import router as agent_approvals_router
+from app.api.routes_auth import router as auth_router
 from app.api.routes_agents import router as agents_router
 from app.api.routes_attachments import router as attachments_router
 from app.api.routes_blob import router as blob_router
@@ -97,6 +111,7 @@ from app.api.routes_settings import router as settings_router
 from app.api.routes_setup import router as setup_router
 from app.api.routes_solve import router as solve_router
 from app.api.routes_stt import router as stt_router
+from app.api.routes_tts import router as tts_router
 from app.api.routes_vision import router as vision_router
 from app.api.routes_sandbox import router as sandbox_router
 from app.api.routes_jobs import router as jobs_router
@@ -167,6 +182,14 @@ async def _bootstrap_llm_routing(migration_task: "asyncio.Task") -> None:
         added = await reseed_keyed_providers()
         if added:
             log.info("llm routing: seeded %d new curated free models", added)
+        # Seed the on-pod local model floor (§2.1 T4) when enabled — an
+        # always-available route that makes the never-empty ladder structural.
+        try:
+            from app.llm.catalog import seed_local_provider
+            if await seed_local_provider():
+                log.info("llm routing: seeded the local model floor (T4).")
+        except Exception:  # noqa: BLE001
+            log.debug("local floor seed failed", exc_info=True)
         # Flag discovered multimodal models so image turns can route across the
         # user's FULL configured catalog, not just the curated vision models.
         vis = await backfill_vision_flags()
@@ -195,6 +218,22 @@ async def _bootstrap_llm_routing(migration_task: "asyncio.Task") -> None:
         log.debug("llm routing: cooldown rehydrate failed", exc_info=True)
 
     try:
+        # §2.7 proactive quota planning: restore the per-key daily ledgers so a
+        # restart doesn't wipe the day's spend (no-op unless quota_planning on).
+        from app.llm.quota_plan import rehydrate as _qp_rehydrate
+        await _qp_rehydrate()
+    except Exception:  # noqa: BLE001
+        log.debug("llm routing: quota-plan rehydrate failed", exc_info=True)
+
+    try:
+        # §2.5 gauntlet: restore probe scorecards so a restart doesn't re-
+        # quarantine every already-proven model (no-op unless gauntlet on).
+        from app.llm.gauntlet import rehydrate as _g_rehydrate
+        await _g_rehydrate()
+    except Exception:  # noqa: BLE001
+        log.debug("llm routing: gauntlet rehydrate failed", exc_info=True)
+
+    try:
         from app.llm.health import start_health_loop
 
         start_health_loop()
@@ -207,6 +246,15 @@ async def lifespan(app: FastAPI):
     # Force config load on startup so any YAML error fails loudly here
     # rather than on the first request.
     get_config()
+    # §11.1: scrub secrets from EVERY log line by construction — wrap the log
+    # sinks so an API key / JWT / Authorization header can't reach a log even if
+    # a call site forgets. First thing, so startup logs are covered too.
+    # Idempotent + fail-open: logging hygiene must never block startup.
+    try:
+        from app.security.log_redact import install_log_redaction
+        install_log_redaction()
+    except Exception:  # noqa: BLE001
+        pass
     # Wire the live-config event bus so subsystems rebuild themselves
     # in-place when the user saves Settings. No-op if already done.
     try:
@@ -469,6 +517,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# §10.1b auth gate — injects the verified user_id at the edge. Added BEFORE CORS
+# so CORS stays the outermost layer (its headers wrap a 401, preflight OPTIONS is
+# handled before auth). No-op when `auth.enabled` is off → device identity today.
+from app.api.auth import AuthMiddleware
+
+app.add_middleware(AuthMiddleware)
+
 # Never combine credentialed CORS with a wildcard origin: it's the classic
 # unsafe combo (any site could ride a user's credentials) AND browsers reject
 # `Access-Control-Allow-Origin: *` with credentials anyway. Credentials are
@@ -490,6 +545,7 @@ app.add_middleware(
 # smooth — see app/middleware/selective_gzip.py.
 app.add_middleware(SelectiveGZipMiddleware, minimum_size=500)
 
+app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(chat_agent_router)
 app.include_router(attachments_router)
@@ -498,6 +554,7 @@ app.include_router(resume_router)
 app.include_router(settings_router)
 app.include_router(solve_router)
 app.include_router(stt_router)
+app.include_router(tts_router)
 app.include_router(vision_router)
 app.include_router(sandbox_router)
 app.include_router(jobs_router)
@@ -528,6 +585,27 @@ async def root() -> dict[str, str]:
         "health": "/api/health",
         "settings": "/api/settings",
     }
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    """Liveness (vNext §6.2): the process is up and answering. Cheap and never
+    flaps during model warmup — this is what the pod watchdog / RunPod proxy
+    should poll. Readiness of subsystems is a separate signal at /readyz."""
+    from app.api.readiness import liveness
+    return liveness()
+
+
+@app.get("/readyz")
+async def readyz():
+    """Readiness (vNext §6.2): every subsystem the app needs to actually work is
+    warm (Postgres + migrations, embedder, STT; router/vision behind flags).
+    Returns 200 when ready, 503 otherwise — with a per-check breakdown."""
+    from fastapi.responses import JSONResponse
+    from app.api.readiness import readiness_report
+    report = await readiness_report()
+    return JSONResponse(
+        status_code=200 if report.get("ready") else 503, content=report)
 
 
 @app.get("/api/models/warmup")

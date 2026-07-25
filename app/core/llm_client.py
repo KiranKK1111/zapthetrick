@@ -533,15 +533,57 @@ class LLMClient:
         # the stored answer instead of paying latency/quota again.
         from app.llm import cache as _cache
         _ck = _cache.maybe_key(messages, options or {}, model=model)
+        # T5 exhaustion fallback key (§2.1): prompt-only, so a total-outage
+        # fallback can serve a recent answer to the same question even if it was
+        # asked at a different difficulty/temperature. Stored on every put below.
+        _rk = _cache.relaxed_key(messages, model=model) if _ck else None
+        # §3.6 near (embedding) tier: embed the normalized prompt ONCE here (core
+        # owns the embedder, keeping app/llm/cache free of an app.rag edge) and
+        # reuse it for the near lookup + the near index. Flag-gated + fail-open.
+        _qvec = None
+        if _ck and _cache.near_enabled():
+            try:
+                import asyncio as _aio
+
+                from app.rag import embedder as _emb
+                _np = _cache.normalized_prompt(messages)
+                if _np:
+                    _qvec = await _aio.to_thread(_emb.embed_one, _np)
+            except Exception:  # noqa: BLE001 — near tier is best-effort
+                _qvec = None
         if _ck:
             _hit = _cache.get(_ck)
             if _hit is not None:
                 return _hit, None
+            # An exact miss can still be served by a semantically-equivalent
+            # recent prompt in the same user+context scope.
+            _near = _cache.near_get(messages, options or {}, model=model,
+                                    query_vec=_qvec)
+            if _near is not None:
+                return _near[0], None
         provider = cfg.llm.provider
         if provider == "auto":
-            text, route = await self._auto_complete(messages, model, options or {})
+            from app.llm.router import NoRouteAvailable
+            try:
+                text, route = await self._auto_complete(messages, model, options or {})
+            except NoRouteAvailable:
+                # Never-empty ladder's last rung (T5): all cloud routes are
+                # exhausted and there is no local floor — serve a recent cached
+                # answer for this prompt rather than surfacing a routing error.
+                _fb = (_cache.get(_ck) if _ck else None) or (
+                    _cache.get(_rk) if _rk else None)
+                if _fb is not None:
+                    logging.getLogger("zapthetrick.llm").warning(
+                        "routing: all routes exhausted — serving a recent "
+                        "cached answer (T5).")
+                    return _fb, None
+                raise
             if _ck:
                 _cache.put(_ck, text)
+                _cache.near_index(messages, key=_ck, model=model,
+                                  query_vec=_qvec)
+            if _rk:
+                _cache.put(_rk, text)
             return text, getattr(route, "model_db_id", None)
         if provider == "ollama":
             text = await self._ollama_complete(messages, model, options or {})

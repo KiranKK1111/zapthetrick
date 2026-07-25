@@ -92,6 +92,12 @@ PROVIDERS: dict[str, ProviderSpec] = {
         ProviderSpec("kilo", "Kilo Gateway", "https://api.kilo.ai/api/gateway/v1", allow_anonymous=True),
         ProviderSpec("pollinations", "Pollinations", "https://text.pollinations.ai/openai/v1", allow_anonymous=True),
         ProviderSpec("llm7", "LLM7", "https://api.llm7.io/v1", allow_anonymous=True),
+        # On-pod local generation floor (llama.cpp OpenAI-compatible server) —
+        # the never-empty ladder's T4 (§2.1). Anonymous (no key), and only ever
+        # routed to when llm.local.enabled is on AND its model row is seeded, so
+        # it's inert until the runtime is baked. Exempt from keyless pruning.
+        ProviderSpec("local", "Local (llama.cpp)", "http://127.0.0.1:8081/v1",
+                     allow_anonymous=True),
         # Additional OpenAI-compatible chat providers — bring your own key and
         # "Refresh models from provider" to populate the catalog. Names match
         # the Provider Atlas so the UI shows one card per provider.
@@ -486,23 +492,31 @@ def seed_rows() -> list[dict]:
     return rows
 
 
-async def seed_provider(platform: str) -> int:
-    """Idempotently seed ONE provider's curated models (enabled) + fallback rows.
+def _cat_user():
+    """The user whose catalog we're seeding/reading (§10.1c). None → anonymous
+    (falls back to the device user), so single-user behaviour is unchanged."""
+    try:
+        from storage.context import get_request_user_id
+        return get_request_user_id()
+    except Exception:  # noqa: BLE001
+        return None
 
-    Called when a key is added for `platform`, so the curated free-tier models
-    (with their rate-limit metadata + intelligence ranks) become routable
-    immediately. Discovery then layers the provider's full /models list on top
-    (disabled). Returns the number of curated models added.
 
-    Fallback priority for curated models = their intelligence_rank, so the
-    default chain is sensibly ordered regardless of which provider was keyed
-    first. No-op if Postgres isn't ready or the provider has no curated rows.
+async def seed_provider(platform: str, *, user_id=None) -> int:
+    """Idempotently seed ONE provider's curated models (enabled) + fallback rows
+    FOR ONE USER (§10.1c). Called when a user adds a key for `platform`, so their
+    curated free-tier models become routable immediately. `user_id` defaults to
+    the current request's user; each user gets their own catalog rows.
+
+    Fallback priority for curated models = their intelligence_rank. No-op if
+    Postgres isn't ready or the provider has no curated rows.
     """
     from sqlalchemy import select
 
     from storage.db import get_session_factory
     from storage.models import LLMFallbackConfig, LLMModel
 
+    uid = user_id if user_id is not None else _cat_user()
     rows = [r for r in seed_rows() if r["platform"] == platform]
     if not rows:
         return 0
@@ -514,31 +528,108 @@ async def seed_provider(platform: str) -> int:
         existing = {
             m.model_id
             for m in (
-                await session.execute(select(LLMModel).where(LLMModel.platform == platform))
+                await session.execute(
+                    select(LLMModel).where(
+                        LLMModel.platform == platform,
+                        LLMModel.user_id == uid))
             ).scalars().all()
         }
         added = [r for r in rows if r["model_id"] not in existing]
         for row in added:
-            session.add(LLMModel(**row))
+            session.add(LLMModel(user_id=uid, **row))
         await session.flush()  # assign ids
 
+        models = (
+            await session.execute(
+                select(LLMModel).where(
+                    LLMModel.platform == platform, LLMModel.user_id == uid))
+        ).scalars().all()
+        model_ids = [m.id for m in models]
         configured = {
             fc.model_db_id
-            for fc in (await session.execute(select(LLMFallbackConfig))).scalars().all()
+            for fc in (
+                await session.execute(
+                    select(LLMFallbackConfig).where(
+                        LLMFallbackConfig.model_db_id.in_(model_ids or [-1])))
+            ).scalars().all()
         }
-        models = (
-            await session.execute(select(LLMModel).where(LLMModel.platform == platform))
-        ).scalars().all()
         for m in models:
             if m.id in configured:
                 continue
             session.add(
                 LLMFallbackConfig(
-                    model_db_id=m.id, priority=m.intelligence_rank, enabled=m.enabled
-                )
+                    user_id=uid, model_db_id=m.id,
+                    priority=m.intelligence_rank, enabled=m.enabled)
             )
         await session.commit()
         return len(added)
+
+
+def local_enabled() -> bool:
+    """Whether the on-pod local generation floor (llama.cpp) is enabled. Default
+    OFF until the runtime is baked + the model is present. Read defensively so
+    the absence of an `llm.local` config section is fine."""
+    try:
+        from app.core.config_loader import cfg
+        loc = getattr(cfg.llm, "local", None)
+        return bool(getattr(loc, "enabled", False)) if loc is not None else False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def local_model_id() -> str:
+    """The local model id (matches what the llama.cpp server serves)."""
+    try:
+        from app.core.config_loader import cfg
+        loc = getattr(cfg.llm, "local", None)
+        mid = getattr(loc, "model_id", None) if loc is not None else None
+        return str(mid) if mid else "qwen3-4b-instruct"
+    except Exception:  # noqa: BLE001
+        return "qwen3-4b-instruct"
+
+
+async def seed_local_provider() -> int:
+    """Seed the always-available local model — the never-empty ladder's T4 floor
+    (§2.1). Enabled, anonymous (no key), NO rate limits, and ranked WEAK (high
+    intelligence_rank) so cloud models win on quality while it stays ALWAYS
+    routable. No-op when llm.local.enabled is off. Idempotent."""
+    if not local_enabled():
+        return 0
+    from sqlalchemy import select
+
+    from storage.db import get_session_factory
+    from storage.models import LLMFallbackConfig, LLMModel
+
+    factory = get_session_factory()
+    if factory is None:
+        return 0
+    mid = local_model_id()
+    async with factory() as session:
+        existing = (
+            await session.execute(
+                select(LLMModel).where(LLMModel.platform == "local",
+                                       LLMModel.model_id == mid)
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            existing = LLMModel(
+                platform="local", model_id=mid, display_name=f"Local · {mid}",
+                intelligence_rank=60, speed_rank=8, enabled=True,
+                supports_vision=False, context_window=32768,
+            )
+            session.add(existing)
+            await session.flush()  # assign id
+        cfg_row = (
+            await session.execute(
+                select(LLMFallbackConfig).where(
+                    LLMFallbackConfig.model_db_id == existing.id)
+            )
+        ).scalar_one_or_none()
+        if cfg_row is None:
+            session.add(LLMFallbackConfig(model_db_id=existing.id,
+                                          priority=9999, enabled=True))
+        await session.commit()
+        return 1
 
 
 async def reseed_keyed_providers() -> int:
@@ -555,18 +646,19 @@ async def reseed_keyed_providers() -> int:
     if factory is None:
         return 0
     async with factory() as session:
-        keyed = {
-            p
-            for (p,) in (
-                await session.execute(
-                    select(LLMApiKey.platform).where(LLMApiKey.enabled.is_(True))
-                )
-            ).all()
-        }
+        # Per-user: re-seed each (user, platform) that has an enabled key, so
+        # every account's catalog stays current across restarts (§10.1c).
+        keyed = (
+            await session.execute(
+                select(LLMApiKey.user_id, LLMApiKey.platform)
+                .where(LLMApiKey.enabled.is_(True))
+                .distinct()
+            )
+        ).all()
     total = 0
-    for platform in sorted(keyed):
+    for (uid, platform) in keyed:
         try:
-            total += await seed_provider(platform)
+            total += await seed_provider(platform, user_id=uid)
         except Exception:  # noqa: BLE001 — one bad provider must not block others
             pass
     return total
@@ -624,19 +716,35 @@ async def prune_keyless_providers() -> int:
     except Exception:  # noqa: BLE001
         anon = set()
 
+    from collections import defaultdict
+
     async with factory() as session:
-        keyed = {
-            p
-            for (p,) in (
-                await session.execute(
-                    select(LLMApiKey.platform).where(LLMApiKey.enabled.is_(True))
-                )
+        # Per-user prune: for EACH user, drop only THEIR models on platforms they
+        # have no key for (anon providers + the shared local/NULL floor are never
+        # pruned). One user's keys never affect another's catalog (§10.1c).
+        keyed_by_user: dict = defaultdict(set)
+        for (uid, p) in (
+            await session.execute(
+                select(LLMApiKey.user_id, LLMApiKey.platform)
+                .where(LLMApiKey.enabled.is_(True))
+            )
+        ).all():
+            keyed_by_user[uid].add(p)
+
+        model_users = {
+            u for (u,) in (
+                await session.execute(select(LLMModel.user_id).distinct())
             ).all()
         }
-        keep = keyed | anon
-        stmt = delete(LLMModel)
-        if keep:
-            stmt = stmt.where(LLMModel.platform.notin_(keep))
-        result = await session.execute(stmt)  # fallback rows cascade (FK ondelete)
+        deleted = 0
+        for uid in model_users:
+            if uid is None:
+                continue  # never prune the shared local floor (NULL-owned)
+            keep = keyed_by_user.get(uid, set()) | anon
+            stmt = delete(LLMModel).where(LLMModel.user_id == uid)
+            if keep:
+                stmt = stmt.where(LLMModel.platform.notin_(keep))
+            result = await session.execute(stmt)  # fallback cascades (FK ondelete)
+            deleted += result.rowcount or 0
         await session.commit()
-        return result.rowcount or 0
+        return deleted

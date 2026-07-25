@@ -78,6 +78,14 @@ async def ensure_device_user() -> uuid.UUID | None:
     UUID. Failures are non-fatal — falls back to None, route handlers
     treat that as anonymous mode (the `user_id` column is nullable).
     """
+    # §10.1c: when a request is authenticated, THAT user is the owner — every
+    # route resolving "the user" scopes to the signed-in account. Anonymous /
+    # auth-off falls through to the device user (byte-identical to today).
+    from storage.context import get_request_user_id
+    auth_uid = get_request_user_id()
+    if auth_uid is not None:
+        return auth_uid
+
     global _cached_user_id
     if _cached_user_id is not None:
         return _cached_user_id

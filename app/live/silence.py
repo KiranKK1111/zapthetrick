@@ -69,6 +69,18 @@ def classify(
         return SilenceSignal(label=UNKNOWN, confidence=0.0)
 
 
+def seed_baseline(session_id: str, *, interviewer_audio: bool | None = None) -> None:
+    """§4.7 seam — the pre-flight board (Component A) hands the interviewer-audio
+    baseline to the silence WATCHDOG (`app/live/watchdog.py`) at session start.
+    Thin delegate so A's existing `silence.seed_baseline(...)` call wires through;
+    a no-op when the watchdog flag is off. Never raises."""
+    try:
+        from app.live import watchdog as _wd
+        _wd.seed_baseline(session_id, interviewer_audio=interviewer_audio)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def directive(signal: SilenceSignal) -> str:
     """A soft, advisory opening nudge. '' for done/unknown or low confidence."""
     try:
@@ -85,5 +97,5 @@ def directive(signal: SilenceSignal) -> str:
         return ""
 
 
-__all__ = ["SilenceSignal", "classify", "directive",
+__all__ = ["SilenceSignal", "classify", "directive", "seed_baseline",
            "THINKING", "HESITATION", "DONE", "UNKNOWN"]

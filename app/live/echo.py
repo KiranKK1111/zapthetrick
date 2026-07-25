@@ -68,6 +68,34 @@ def is_candidate_echo(
     return best >= threshold, best
 
 
+def best_match(sid: str, utterance: str) -> "tuple[str, float]":
+    """Return (displayed_text, similarity) of the shown answer the candidate is
+    most likely reading. Empty text on any miss/failure. Used by delivery
+    tracking (§4.14) to align the SPOKEN utterance against the DISPLAYED script."""
+    u = (utterance or "").strip()
+    if not sid or len(u) < 8:
+        return "", 0.0
+    with _LOCK:
+        items = list(_ANSWERS.get(sid) or ())
+    if not items:
+        return "", 0.0
+    try:
+        from app.rag.embedder import embed_one
+        uv = embed_one(u[:2000])
+    except Exception:  # noqa: BLE001
+        return "", 0.0
+    if not uv:
+        return "", 0.0
+    best_text, best = "", 0.0
+    for text, vec in items:
+        s = 0.0
+        for a, b in zip(uv, vec):
+            s += a * b
+        if s > best:
+            best, best_text = s, text
+    return best_text, best
+
+
 def forget_session(sid: str) -> None:
     with _LOCK:
         _ANSWERS.pop(sid, None)

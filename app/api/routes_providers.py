@@ -35,15 +35,23 @@ router = APIRouter(prefix="/api/providers")
 
 
 async def _models_by_platform() -> dict[str, list]:
+    from sqlalchemy import or_
+
+    from app.api.auth import resolve_user_id
     from storage.db import get_session_factory
     from storage.models import LLMModel
 
     factory = get_session_factory()
     if factory is None:
         return {}
+    uid = await resolve_user_id()  # this user's catalog + the shared local floor
     async with factory() as session:
         rows = (
-            await session.execute(select(LLMModel).order_by(LLMModel.intelligence_rank.asc()))
+            await session.execute(
+                select(LLMModel)
+                .where(or_(LLMModel.user_id == uid,
+                           LLMModel.platform == "local"))
+                .order_by(LLMModel.intelligence_rank.asc()))
         ).scalars().all()
     grouped: dict[str, list] = {}
     for m in rows:
@@ -133,23 +141,50 @@ async def add_key(platform: str, body: dict) -> dict:
         log.exception("add_key failed for %s", platform)
         raise HTTPException(500, detail=f"Could not store key: {exc}")
 
-    # First materialize this provider's curated free-tier models (enabled,
-    # with rate-limit metadata) so routing works immediately, then auto-discover
-    # its full /models list (disabled) so the catalog fills out. Both
-    # best-effort — a discovery hiccup must never fail the key add.
-    discovered = {"discovered": 0, "added": 0}
-    try:
-        from app.llm.catalog import seed_provider
-        from app.llm.discovery import discover_models
+    # §2.8 import gate: validate the freshly-stored key NOW and quarantine a
+    # confirmed-bad one immediately (instead of waiting for the ~5-min health
+    # sweep), so an invalid key can never surface as a runtime "no route". Both
+    # fail-open and blip-safe — an inconclusive result keeps the key usable.
+    from app.llm import import_gate
 
-        await seed_provider(platform)
-        discovered = await discover_models(platform, api_key=key.strip())
-    except Exception as exc:  # noqa: BLE001
-        log.info("seed/discovery after key add failed for %s: %s", platform, exc)
+    status = view.status
+    validated = False
+    if import_gate.validation_enabled():
+        try:
+            from app.llm.health import check_one_key
+            raw = await check_one_key(view.id)   # writes healthy/invalid/error
+            status = import_gate.resolve_upload_status(raw, prior=view.status)
+            if status != raw:
+                # An inconclusive 'error' (403/transport blip) must not sideline
+                # a possibly-good key — restore it to a usable 'unknown'.
+                await keys_repo.set_status(view.id, status)
+            validated = True
+        except Exception as exc:  # noqa: BLE001 — validation never fails the add
+            log.info("import validation for %s failed: %s", platform, exc)
+    decision = import_gate.gate(status)
+
+    # Only a USABLE key's provider gets a catalog fetch: materialize its curated
+    # free-tier models (enabled) so routing works immediately, then auto-discover
+    # its full /models list (disabled). Best-effort — a hiccup never fails the add.
+    discovered = {"discovered": 0, "added": 0}
+    if decision["fill_catalog"]:
+        try:
+            from app.llm.catalog import seed_provider
+            from app.llm.discovery import discover_models
+
+            await seed_provider(platform)
+            discovered = await discover_models(platform, api_key=key.strip())
+        except Exception as exc:  # noqa: BLE001
+            log.info("seed/discovery after key add failed for %s: %s", platform, exc)
+    else:
+        log.info("key for %s quarantined at upload (status=%s) — skipping model "
+                 "discovery; it stays out of routing until it validates.",
+                 platform, status)
 
     return {
         "id": view.id, "platform": view.platform, "label": view.label,
-        "masked": view.masked, "status": view.status, "enabled": view.enabled,
+        "masked": view.masked, "status": status, "enabled": view.enabled,
+        "validated": validated, "quarantined": decision["quarantined"],
         "discovered": discovered,
     }
 
@@ -205,6 +240,9 @@ async def get_fallback(sort: str = "manual") -> dict:
     user's manually-dragged `priority` is preserved)."""
     from collections import defaultdict
 
+    from sqlalchemy import or_
+
+    from app.api.auth import resolve_user_id
     from app.llm import ratelimit
     from storage.db import get_session_factory
     from storage.models import LLMApiKey, LLMFallbackConfig, LLMModel
@@ -212,17 +250,20 @@ async def get_fallback(sort: str = "manual") -> dict:
     factory = get_session_factory()
     if factory is None:
         raise HTTPException(503, detail="Database not ready.")
+    uid = await resolve_user_id()  # this user's chain + keys + the local floor
     async with factory() as session:
         rows = (
             await session.execute(
                 select(LLMFallbackConfig, LLMModel)
                 .join(LLMModel, LLMFallbackConfig.model_db_id == LLMModel.id)
+                .where(or_(LLMModel.user_id == uid, LLMModel.platform == "local"))
                 .order_by(LLMFallbackConfig.priority.asc())
             )
         ).all()
         keys = (
             await session.execute(
                 select(LLMApiKey.platform, LLMApiKey.id).where(
+                    LLMApiKey.user_id == uid,
                     LLMApiKey.enabled.is_(True),
                     LLMApiKey.status.in_(("healthy", "unknown")),
                 )
@@ -302,6 +343,7 @@ async def set_fallback(body: dict) -> dict:
     Body: {"order": [model_db_id, ...]}  — index becomes priority (1-based)
           {"enabled": {model_db_id: bool, ...}}  — per-model fallback toggle
     """
+    from app.api.auth import resolve_user_id
     from storage.db import get_session_factory
     from storage.models import LLMFallbackConfig, LLMModel
 
@@ -310,25 +352,32 @@ async def set_fallback(body: dict) -> dict:
         raise HTTPException(503, detail="Database not ready.")
     order = (body or {}).get("order") or []
     enabled = (body or {}).get("enabled") or {}
+    uid = await resolve_user_id()
     async with factory() as session:
+        # Every update is scoped to THIS user's rows — a client can't reorder or
+        # toggle another account's models (§10.1c).
         for i, model_db_id in enumerate(order):
             await session.execute(
                 update(LLMFallbackConfig)
-                .where(LLMFallbackConfig.model_db_id == int(model_db_id))
+                .where(LLMFallbackConfig.model_db_id == int(model_db_id),
+                       LLMFallbackConfig.user_id == uid)
                 .values(priority=i + 1)
             )
         for model_db_id, on in enabled.items():
             mid = int(model_db_id)
             await session.execute(
                 update(LLMFallbackConfig)
-                .where(LLMFallbackConfig.model_db_id == mid)
+                .where(LLMFallbackConfig.model_db_id == mid,
+                       LLMFallbackConfig.user_id == uid)
                 .values(enabled=bool(on))
             )
             # Keep the model's own enabled flag in sync — the router requires
             # BOTH the fallback row and the model to be enabled, so toggling
             # here is what makes a discovered/disabled model actually routable.
             await session.execute(
-                update(LLMModel).where(LLMModel.id == mid).values(enabled=bool(on))
+                update(LLMModel)
+                .where(LLMModel.id == mid, LLMModel.user_id == uid)
+                .values(enabled=bool(on))
             )
         await session.commit()
     return {"ok": True}
@@ -369,10 +418,16 @@ async def _rotation_count(route_all: bool) -> int:
     factory = get_session_factory()
     if factory is None:
         return 0
+    from sqlalchemy import or_
+
+    from app.api.auth import resolve_user_id
+    uid = await resolve_user_id()
+    _user_models = or_(LLMModel.user_id == uid, LLMModel.platform == "local")
     async with factory() as session:
         keys = (
             await session.execute(
                 select(LLMApiKey.platform, LLMApiKey.id).where(
+                    LLMApiKey.user_id == uid,
                     LLMApiKey.enabled.is_(True),
                     # Match the router: a key flagged invalid/error is NOT usable,
                     # so it shouldn't inflate the live-available count.
@@ -383,7 +438,8 @@ async def _rotation_count(route_all: bool) -> int:
         _cols = (LLMModel.platform, LLMModel.model_id, LLMModel.rpm_limit,
                  LLMModel.rpd_limit, LLMModel.tpm_limit, LLMModel.tpd_limit)
         if route_all:
-            rows = (await session.execute(select(*_cols))).all()
+            rows = (await session.execute(
+                select(*_cols).where(_user_models))).all()
         else:
             rows = (
                 await session.execute(
@@ -391,7 +447,7 @@ async def _rotation_count(route_all: bool) -> int:
                     .join(LLMFallbackConfig,
                           LLMFallbackConfig.model_db_id == LLMModel.id)
                     .where(LLMFallbackConfig.enabled.is_(True),
-                           LLMModel.enabled.is_(True))
+                           LLMModel.enabled.is_(True), _user_models)
                 )
             ).all()
 

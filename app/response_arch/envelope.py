@@ -83,6 +83,8 @@ def build_envelope(
     content: str | None = None,
     knowledge_sources: list[str] | None = None,
     verified: bool | None = None,
+    effort: dict | None = None,
+    speech_text: str | None = None,
 ) -> dict:
     """Assemble a `response.v1` envelope from a turn's computed fields → JSON dict.
 
@@ -103,6 +105,12 @@ def build_envelope(
         "modality": _modality,
         "trace_id": (trace or {}).get("id"),
         "trace": trace or None,
+        # §8.2 effort profile the turn ran at (tier/thinking_budget/best_of_n/
+        # use_judge/reasoning/escalate) — present only when the dial is on.
+        "effort": effort or None,
+        # §10.5 spoken form of the answer (Markdown → natural read-aloud text) —
+        # present only when the TTS lane is on; the FE speaks THIS, not raw md.
+        "speech_text": (speech_text or None),
     }
     meta = {k: v for k, v in meta.items() if v not in (None, [], {})}
     # Response fingerprint (Phase 6 #22) — reproducibility/provenance id over the

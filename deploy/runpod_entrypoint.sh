@@ -25,6 +25,16 @@ BACKUP_INTERVAL_S="${BACKUP_INTERVAL_S:-1800}"    # 30 min
 export HF_HOME="${HF_HOME:-/workspace/hf_cache}"
 export ZAPTHETRICK_CONFIG_PATH="$CFG"
 export BACKUP_DIR
+# ---- local generation floor (§2.1 T4) — OPT-IN (default OFF) -----------------
+# Set LOCAL_LLM_ENABLED=1 to run an on-pod llama.cpp OpenAI server so the router
+# ALWAYS has a route (never-empty). Default off → the current deploy is unchanged.
+LOCAL_LLM_ENABLED="${LOCAL_LLM_ENABLED:-0}"
+LOCAL_LLM_PORT="${LOCAL_LLM_PORT:-8081}"
+LOCAL_LLM_MODEL_ID="${LOCAL_LLM_MODEL_ID:-qwen3-4b-instruct}"
+LOCAL_LLM_GGUF="${LOCAL_LLM_GGUF:-/workspace/models/local-llm.gguf}"
+# A Qwen small-instruct GGUF (Q4_K_M). Override with any llama.cpp-compatible
+# GGUF URL. Default is a widely-mirrored 3B; swap for a 4B when you prefer.
+LOCAL_LLM_GGUF_URL="${LOCAL_LLM_GGUF_URL:-https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf}"
 PGBIN="$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)"
 mkdir -p /workspace "$HF_HOME" "$BACKUP_DIR"
 
@@ -36,6 +46,8 @@ if [ ! -f "$CFG" ]; then
   echo "==> rendering $CFG from env (first boot on this volume)"
   APP_PORT="$APP_PORT" PGPASS="$PGPASS" \
   OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" NVIDIA_API_KEY="${NVIDIA_API_KEY:-}" \
+  LOCAL_LLM_ENABLED="$LOCAL_LLM_ENABLED" LOCAL_LLM_MODEL_ID="$LOCAL_LLM_MODEL_ID" \
+  LOCAL_LLM_PORT="$LOCAL_LLM_PORT" \
   "$VENV/bin/python" - "$APP_DIR/config.example.yaml" "$CFG" <<'PY'
 import os, sys, yaml
 src, dst = sys.argv[1], sys.argv[2]
@@ -52,6 +64,13 @@ if os.environ.get('OPENROUTER_API_KEY'):
     c.setdefault('llm', {})['openrouter_api_key'] = os.environ['OPENROUTER_API_KEY']
 if os.environ.get('NVIDIA_API_KEY'):
     c.setdefault('llm', {})['nvidia_api_key'] = os.environ['NVIDIA_API_KEY']
+# Local generation floor (§2.1 T4) — the app seeds an always-available local
+# model when this is on, so the never-empty ladder becomes structural.
+if os.environ.get('LOCAL_LLM_ENABLED') == '1':
+    c.setdefault('llm', {}).setdefault('local', {}).update(
+        enabled=True,
+        model_id=os.environ.get('LOCAL_LLM_MODEL_ID', 'qwen3-4b-instruct'),
+        base_url='http://127.0.0.1:%s/v1' % os.environ.get('LOCAL_LLM_PORT', '8081'))
 yaml.safe_dump(c, open(dst, 'w'), sort_keys=False)
 print('wrote', dst)
 PY
@@ -71,15 +90,56 @@ sudo -u postgres "$PGBIN/pg_ctl" -D "$PGDATA" -l /workspace/pg.log -o "-p 5432" 
 sudo -u postgres psql -p 5432 -c "ALTER USER postgres PASSWORD '${PGPASS}';"
 sudo -u postgres psql -p 5432 -c "CREATE EXTENSION IF NOT EXISTS vector;"
 if [ "$FRESH" = 1 ] && [ -f "$BACKUP_DIR/latest.dump" ]; then
-  echo "==> fresh DB + backup found → pg_restore $BACKUP_DIR/latest.dump"
-  PGPASSWORD="$PGPASS" "$PGBIN/pg_restore" --clean --if-exists --no-owner \
-      -h 127.0.0.1 -p 5432 -U postgres -d postgres \
-      "$BACKUP_DIR/latest.dump" 2>>/workspace/pg_restore.log || \
-    echo "   (restore reported non-fatal errors — see /workspace/pg_restore.log)"
+  echo "==> fresh DB + backup found → restoring $BACKUP_DIR/latest.dump"
+  _restore_src="$BACKUP_DIR/latest.dump"
+  # §11.1: if backups are AES-encrypted (PG_BACKUP_ENC_KEY set), decrypt to a
+  # temp on the pod's LOCAL disk (never /workspace) before pg_restore.
+  if [ -n "${PG_BACKUP_ENC_KEY:-}" ]; then
+    _restore_src="/tmp/latest-decrypted.dump"
+    if ! openssl enc -d -aes-256-cbc -pbkdf2 -pass env:PG_BACKUP_ENC_KEY \
+          -in "$BACKUP_DIR/latest.dump" -out "$_restore_src" 2>/dev/null; then
+      echo "   (could not decrypt backup — wrong PG_BACKUP_ENC_KEY? skipping restore)"
+      _restore_src=""
+    fi
+  fi
+  if [ -n "$_restore_src" ]; then
+    PGPASSWORD="$PGPASS" "$PGBIN/pg_restore" --clean --if-exists --no-owner \
+        -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+        "$_restore_src" 2>>/workspace/pg_restore.log || \
+      echo "   (restore reported non-fatal errors — see /workspace/pg_restore.log)"
+    [ "$_restore_src" = "/tmp/latest-decrypted.dump" ] && rm -f "$_restore_src"
+  fi
 fi
 sudo -u postgres "$PGBIN/pg_ctl" -D "$PGDATA" -w stop   # supervisor owns it now
 
 # ---- 3) supervisor: postgres + dragonfly + app + periodic backup + watchdog ---
+# Local LLM floor (opt-in, §2.1 T4): fetch the GGUF once (to /workspace) and build
+# a supervisor program serving an OpenAI-compatible API on 127.0.0.1. Empty when
+# disabled → the config below is byte-identical to today.
+LOCALLLM_PROGRAM=""
+if [ "$LOCAL_LLM_ENABLED" = "1" ]; then
+  mkdir -p "$(dirname "$LOCAL_LLM_GGUF")"
+  if [ ! -f "$LOCAL_LLM_GGUF" ]; then
+    echo "==> downloading local LLM GGUF -> $LOCAL_LLM_GGUF"
+    curl -fsSL "$LOCAL_LLM_GGUF_URL" -o "$LOCAL_LLM_GGUF" \
+      || echo "   (GGUF download failed — local floor stays inert until present)"
+  fi
+  if [ -f "$LOCAL_LLM_GGUF" ]; then
+    LOCALLLM_PROGRAM=$(cat <<LLEOF
+
+[program:localllm]
+command=${VENV}/bin/python -m llama_cpp.server --model ${LOCAL_LLM_GGUF} --host 127.0.0.1 --port ${LOCAL_LLM_PORT} --n_gpu_layers -1 --chat_format chatml --n_ctx 8192
+autostart=true
+autorestart=true
+priority=15
+startsecs=5
+stdout_logfile=/workspace/localllm.log
+stderr_logfile=/workspace/localllm.log
+LLEOF
+)
+  fi
+fi
+
 echo "==> writing supervisor config"
 cat > /etc/supervisor/conf.d/zaptrick.conf <<EOF
 [program:postgres]
@@ -111,7 +171,7 @@ stdout_logfile=/workspace/app.log
 stderr_logfile=/workspace/app.log
 
 [program:pgbackup]
-command=bash -c 'while true; do sleep ${BACKUP_INTERVAL_S}; POSTGRES_PASSWORD="${PGPASS}" BACKUP_DIR="${BACKUP_DIR}" bash ${APP_DIR}/deploy/pg_backup.sh; done'
+command=bash -c 'while true; do sleep ${BACKUP_INTERVAL_S}; POSTGRES_PASSWORD="${PGPASS}" BACKUP_DIR="${BACKUP_DIR}" PG_BACKUP_ENC_KEY="${PG_BACKUP_ENC_KEY:-}" bash ${APP_DIR}/deploy/pg_backup.sh; done'
 autostart=true
 autorestart=true
 priority=30
@@ -130,12 +190,15 @@ autorestart=true
 priority=40
 stdout_logfile=/workspace/watchdog.log
 stderr_logfile=/workspace/watchdog.log
+${LOCALLLM_PROGRAM}
 EOF
 
 # ---- 4) durable shutdown: dump once on SIGTERM before stopping ---------------
 term_handler() {
   echo "==> SIGTERM: final Postgres dump then shutdown"
-  POSTGRES_PASSWORD="$PGPASS" BACKUP_DIR="$BACKUP_DIR" bash "$APP_DIR/deploy/pg_backup.sh" || true
+  POSTGRES_PASSWORD="$PGPASS" BACKUP_DIR="$BACKUP_DIR" \
+    PG_BACKUP_ENC_KEY="${PG_BACKUP_ENC_KEY:-}" \
+    bash "$APP_DIR/deploy/pg_backup.sh" || true
   supervisorctl stop all || true
   kill -TERM "${SUPERVISOR_PID:-0}" 2>/dev/null || true
 }

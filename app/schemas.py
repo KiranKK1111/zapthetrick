@@ -178,6 +178,14 @@ class AgentsStreamRequest(BaseModel):
     # True when this turn is the answer to a clarification panel — the
     # Clarifier must NOT re-trigger on it (otherwise it asks again in a loop).
     skip_clarify: bool = False
+    # §3.4 idempotency: a client UUID stamped on the composed send. The endpoint
+    # dedups on it so a retry / reconnect replay / double-tap can't create a
+    # duplicate turn. Empty → no idempotency requested.
+    idempotency_key: str = ""
+    # §11.6 protocol versioning: the frame-vocabulary version the client speaks.
+    # The backend emits at the negotiated version (one-back compatible). 0/absent
+    # → a legacy pre-versioning client.
+    protocol_version: int = 0
     # Optional per-turn override of the active clarification mode
     # (explorer | builder | expert | autopilot | teacher). Normally the mode is
     # stored per-device and resolved server-side; this lets a client force one.
@@ -190,6 +198,15 @@ class AgentsStreamRequest(BaseModel):
     # so the warmed connection/handles are used instead of repeated; a mismatch
     # is discarded. Optional/additive — absent → normal request.
     prefetch_token: str | None = None
+    # §10 voice mode: this turn is a spoken conversation. The answer must be
+    # short + conversational (no documents, tables, code, lists, or headings —
+    # they can't be spoken), so the server suppresses deliverable/artifact
+    # generation and adds a spoken-style directive. Default False = normal chat.
+    voice: bool = False
+    # The gender of the selected TTS voice ("female" | "male"). In gendered
+    # languages (Hindi, Marathi, …) the reply's self-reference grammar must agree
+    # with the speaking voice — passed so the model inflects correctly.
+    voice_gender: str | None = None
 
 
 class FeedbackRequest(BaseModel):

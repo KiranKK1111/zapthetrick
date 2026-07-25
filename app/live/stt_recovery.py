@@ -74,12 +74,27 @@ def should_recover(session_id: str, *, threshold: float = 0.45,
         return False
 
 
-def _fallback_target() -> str | None:
-    """Pick a fallback ASR engine id different from the active one. Best-effort;
+def _failover_enabled() -> bool:
+    """§4.7 auto STT failover — cloud path on a GPU-degraded local engine."""
+    try:
+        from app.core.config_loader import cfg
+        return bool(getattr(cfg.live, "stt_failover", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _fallback_target(*, gpu_degraded: bool = False) -> str | None:
+    """Pick a fallback ASR engine id different from the active one. When the GPU
+    is degraded (§4.7) AND failover is on, prefer the CLOUD path — a slow local
+    engine won't recover by swapping to another local engine. Best-effort;
     returns None when nothing better is knowable. Never raises."""
     try:
         from app.core.config_loader import cfg
         active = str(getattr(cfg.stt, "provider", "") or "").strip().lower()
+        # GPU-degraded → the cloud engine is the only genuinely different path.
+        if gpu_degraded and _failover_enabled():
+            cloud = str(getattr(cfg.stt, "cloud_provider", "") or "").strip().lower()
+            return cloud or "cloud"
         # Ordered preference of local engines; skip the active one.
         for cand in ("parakeet", "qwen_asr", "faster_whisper"):
             if cand != active:
@@ -89,17 +104,19 @@ def _fallback_target() -> str | None:
         return None
 
 
-def recover(session_id: str) -> str | None:
+def recover(session_id: str, *, gpu_degraded: bool = False) -> str | None:
     """PLAN a one-time switch to the fallback ASR engine: latch the session so it
     fires at most once, and return the target engine id for the caller to switch
-    to (or None when nothing better is knowable / already recovered). Never
-    raises. The caller performs the actual `app.stt.switch.start_switch`."""
+    to (or None when nothing better is knowable / already recovered). On a
+    GPU-degraded session with `live.stt_failover` on, the target is the CLOUD
+    engine (§4.7). The latch is per-session, so recovery happens once and only
+    re-arms between sessions (`forget_session`). Never raises."""
     try:
         t = _tracker(session_id or "")
         if t.recovered:
             return None
         t.recovered = True     # latch BEFORE returning → never double-fire
-        return _fallback_target()
+        return _fallback_target(gpu_degraded=gpu_degraded)
     except Exception:  # noqa: BLE001
         return None
 

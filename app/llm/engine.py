@@ -202,6 +202,9 @@ _last_model: dict[str, str] = {}
 # Parallel to _last_model but the model_id (stable routing key, not display name)
 # — Phase-2 semantic routing records outcomes by this so scoring keys match.
 _last_model_id: dict[str, str] = {}
+# The platform of the last-answering model, so the §2.6 verify sink can key its
+# scorecard by the SAME identity_key(platform, model_id) the router scores on.
+_last_platform: dict[str, str] = {}
 
 # P2-10: the model db id that most recently SUCCEEDED at a given difficulty, so
 # routing can prefer what's been working (extends learning-lite into routing).
@@ -251,7 +254,8 @@ def _apply_operational_mode(options: dict) -> None:
 
 
 def _record_last_model(session_key: str | None, display_name: str,
-                       model_id: str | None = None) -> None:
+                       model_id: str | None = None,
+                       platform: str | None = None) -> None:
     _last_model["global"] = display_name
     if session_key:
         _last_model[session_key] = display_name
@@ -259,6 +263,22 @@ def _record_last_model(session_key: str | None, display_name: str,
         _last_model_id["global"] = model_id
         if session_key:
             _last_model_id[session_key] = model_id
+    if platform:
+        _last_platform["global"] = platform
+        if session_key:
+            _last_platform[session_key] = platform
+
+
+def get_last_route(session_key: str | None = None) -> tuple[str, str] | None:
+    """(platform, model_id) of the model that most recently answered — so a
+    verify sink can key its scorecard exactly as the router scores (§2.6). None
+    when unknown."""
+    mid = get_last_model_id(session_key)
+    if not mid:
+        return None
+    plat = (_last_platform.get(session_key) if session_key
+            and session_key in _last_platform else _last_platform.get("global"))
+    return (plat or "", mid)
 
 
 def get_last_model(session_key: str | None = None) -> str | None:
@@ -497,6 +517,9 @@ async def route_and_complete(
 
     _task_cat, _needs_tool, _needs_json = _resolve_task_category(
         messages, options, difficulty)
+    # §2.6 — the call site declares a task profile (semantic, upstream); the
+    # engine just threads it to the router (byte-identical when absent).
+    _task_profile = options.pop("task_profile", None)
 
     _retries = _max_retries()
     _deadline = _first_token_deadline()
@@ -505,12 +528,25 @@ async def route_and_complete(
     _track = _RecoveryTracker()   # failure-KB learn loop (records outcomes)
     for _attempt in range(_retries):
         try:
-            route = await router.route_request(
+            _decision = await router.select_route(
                 est, skip, preferred, require_vision=vision, min_context=est,
                 difficulty=difficulty, avoid_model_db_id=avoid,
-                task_category=_task_cat, needs_tool=_needs_tool,
+                task_category=_task_cat, task_profile=_task_profile,
+                needs_tool=_needs_tool,
                 needs_json=_needs_json, query_embedding=_query_emb,
             )
+            if _decision.route is None:
+                # Never-empty ladder (§2.1) exhausted all cloud rungs (T4 local
+                # not available yet; T5 cache not wired here) — surface as the
+                # existing retryable no-route so the backoff/retry path below is
+                # unchanged. With the ladder flag OFF, select_route delegated and
+                # already raised, so route is never None on that path.
+                raise router.NoRouteAvailable(
+                    "All models exhausted. Add more API keys or wait for rate "
+                    "limits to reset.", transient=_decision.transient)
+            route = _decision.route
+            route.rung = _decision.rung
+            route.degraded = list(_decision.degraded)
         except router.NoRouteAvailable as exc:
             # Transient exhaustion under a concurrent burst — back off + retry
             # route selection instead of erroring straight out (see _no_route_retry).
@@ -618,8 +654,21 @@ async def route_and_complete(
         ratelimit.record_request(route.platform, route.model_id, route.key_id)
         ratelimit.record_tokens(route.platform, route.model_id, route.key_id,
                                 _real_total_tokens(est, len(text)))
+        # §2.7 proactive quota planning: count the dispatch against the per-key
+        # daily ledger, then reconcile from the provider's own rate-limit headers
+        # (ground truth beats the seeded estimate). Both no-op unless planning is
+        # on; fully fail-open (never touches a successful turn).
+        try:
+            from app.llm import quota_plan as _qp
+            from app.llm import usage as _usage
+            _qp.record_success(route.platform, route.key_id)
+            _qp.reconcile(route.platform, route.key_id,
+                          _usage.rate_limit_headers())
+        except Exception:  # noqa: BLE001
+            pass
         _set_sticky(session_key, route.model_db_id)
-        _record_last_model(session_key, route.display_name, route.model_id)
+        _record_last_model(session_key, route.display_name, route.model_id,
+                           platform=route.platform)
         _record_diff_success(difficulty, route.model_db_id)
         # Success — if we got here *after* a failure, the recovery we took worked.
         # This is the half of the learn loop that teaches `best_recovery` (P7 #3).
@@ -673,6 +722,10 @@ async def stream_with_continuation(
     (a re-phrased continuation there reads as an echo).
     """
     _override = options.pop("mid_stream_continuation", None)
+    # §3.4: an optional caller-provided list the wrapper appends 'stream_resumed'
+    # to when it recovers a DROPPED stream (so the turn's meta.degraded can
+    # surface the ~1s hiccup). Popped here so it never reaches a provider.
+    _degraded_sink = options.pop("_degraded_sink", None)
     on, max_cont, seam_buf = _resilience_cfg()
     if _override is not None:
         on = bool(_override)
@@ -728,6 +781,10 @@ async def stream_with_continuation(
                 log.info("continuation: stopping with partial after error "
                          "(attempt %d): %s", attempts, exc)
                 return
+            # A dropped stream that we WILL resume — surface it (§3.4).
+            if isinstance(_degraded_sink, list) \
+                    and "stream_resumed" not in _degraded_sink:
+                _degraded_sink.append("stream_resumed")
             attempts += 1
             log.info("continuation: mid-stream error, re-prompting (attempt %d): "
                      "%s", attempts, exc)
@@ -782,6 +839,9 @@ async def route_and_stream(
 
     _task_cat, _needs_tool, _needs_json = _resolve_task_category(
         messages, options, difficulty)
+    # §2.6 — the call site declares a task profile (semantic, upstream); the
+    # engine just threads it to the router (byte-identical when absent).
+    _task_profile = options.pop("task_profile", None)
 
     _retries = _max_retries()
     _deadline = _first_token_deadline()
@@ -790,12 +850,25 @@ async def route_and_stream(
     _track = _RecoveryTracker()   # failure-KB learn loop (records outcomes)
     for _attempt in range(_retries):
         try:
-            route = await router.route_request(
+            _decision = await router.select_route(
                 est, skip, preferred, require_vision=vision, min_context=est,
                 difficulty=difficulty, avoid_model_db_id=avoid,
-                task_category=_task_cat, needs_tool=_needs_tool,
+                task_category=_task_cat, task_profile=_task_profile,
+                needs_tool=_needs_tool,
                 needs_json=_needs_json, query_embedding=_query_emb,
             )
+            if _decision.route is None:
+                # Never-empty ladder (§2.1) exhausted all cloud rungs (T4 local
+                # not available yet; T5 cache not wired here) — surface as the
+                # existing retryable no-route so the backoff/retry path below is
+                # unchanged. With the ladder flag OFF, select_route delegated and
+                # already raised, so route is never None on that path.
+                raise router.NoRouteAvailable(
+                    "All models exhausted. Add more API keys or wait for rate "
+                    "limits to reset.", transient=_decision.transient)
+            route = _decision.route
+            route.rung = _decision.rung
+            route.degraded = list(_decision.degraded)
         except router.NoRouteAvailable as exc:
             # Transient exhaustion under a concurrent burst (multiple live
             # questions answered at once): every model is momentarily rate-
@@ -841,7 +914,8 @@ async def route_and_stream(
                        latency_s=max(0.0, time.monotonic() - _t0))
             ratelimit.record_request(route.platform, route.model_id, route.key_id)
             _set_sticky(session_key, route.model_db_id)
-            _record_last_model(session_key, route.display_name, route.model_id)
+            _record_last_model(session_key, route.display_name, route.model_id,
+                           platform=route.platform)
             # Speculative drafts also stash their model in a per-draft sink, so
             # the speculation layer can RE-ASSERT the winner's model as the
             # last-model after the race (a losing draft may commit its opening

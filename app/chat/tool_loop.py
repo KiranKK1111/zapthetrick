@@ -51,9 +51,21 @@ _PROTOCOL = (
 
 @dataclass
 class ToolLoopResult:
-    """Framed UNTRUSTED evidence blocks + the tool-call records (for chips/trace)."""
+    """Framed UNTRUSTED evidence blocks + the tool-call records (for chips/trace).
+
+    §9.9 quarantine additions (fail-open, default-off): `banners` collects the
+    source-card warnings when a tool result trips the cheap injection screen, and
+    `tainted`/`suspicious` mark the turn so a downstream side-effectful tool needs
+    approval (surfaced by the caller)."""
     evidence: list[str] = field(default_factory=list)
     calls: list[dict] = field(default_factory=list)
+    banners: list[str] = field(default_factory=list)
+    tainted: bool = False
+    suspicious: bool = False
+    # §9.8 freshness: the time-sensitivity tier of the question (stable/slow/
+    # volatile). A volatile/slow turn that runs a live search surfaces a
+    # "verifying current facts" chip.
+    freshness: str = ""
 
     def __bool__(self) -> bool:
         return bool(self.evidence)
@@ -212,17 +224,39 @@ async def run_tool_loop(
         complete = complete_fn or _default_complete
         run_tool = run_tool_fn or _default_run_tool
         from app.response_arch.trust import frame_untrusted
+        # §9.9 quarantine: every tool result is UNTRUSTED. Screen it for injection
+        # (source-card banner) and TAINT the turn so a later side-effectful action
+        # can't ride a poisoned result. Fail-open — an import/logic error here
+        # never blocks the loop; the legacy `frame_untrusted` still frames it.
+        try:
+            from app.security import quarantine as _q
+        except Exception:  # noqa: BLE001
+            _q = None
+        # §9.8 freshness: classify how time-sensitive the question is. A VOLATILE/
+        # SLOW turn that then runs a live search surfaces a calm "verifying
+        # current facts" chip (once). Fail-open — never blocks the loop.
+        _fresh_tier = ""
+        _verifying_sent = False
+        try:
+            from app.understanding import freshness as _fresh
+            if _fresh.enabled():
+                _fresh_tier = _fresh.classify_freshness(question).tier
+                result.freshness = _fresh_tier
+        except Exception:  # noqa: BLE001
+            _fresh_tier = ""
 
         sys = (
             "You are preparing to answer the user's question as accurately as "
             "possible.\n\nAvailable tools:\n" + _tool_docs(names) + "\n\n" + _PROTOCOL
         )
-        convo: list[dict] = [{"role": "system", "content": sys}]
-        for prior in (history or [])[-4:]:
-            r, c = prior.get("role"), prior.get("content")
-            if r and c:
-                convo.append({"role": r, "content": c})
-        convo.append({"role": "user", "content": question})
+        # Assemble via the stable-prefix PromptAssembler (§8.1): byte-identical
+        # to the hand-built [system]+history+user conversation, but the system
+        # prompt now flows through the canonical assembler so prefix-cache
+        # accounting / breakpoints come for free as more layers are wired.
+        from app.core.prompt_layout import PromptAssembler
+        convo: list[dict] = PromptAssembler(
+            persona=sys, recent=list(history or [])[-4:], user=question,
+        ).build()
 
         for _round in range(max(1, max_rounds)):
             raw = await complete(convo, difficulty)
@@ -257,11 +291,37 @@ async def run_tool_loop(
                         + f"\n[... truncated {dropped} chars — result incomplete]")
                 log.info("tool_loop: %s result truncated (%d chars dropped)",
                          tool, dropped)
-            framed = frame_untrusted(body, label=f"{tool} result")
+            # §9.9: screen the result + taint the turn, then quarantine-wrap it
+            # (falls back to the legacy frame when quarantine is disabled, so the
+            # framing is byte-identical until the flag flips).
+            if _q is not None and (_q.enabled() if hasattr(_q, "enabled") else False):
+                try:
+                    screen = _q.screen_injection(body)
+                    result.tainted = True
+                    if screen.suspicious:
+                        result.suspicious = True
+                        banner = _q.banner_for(screen, f"{tool} result")
+                        if banner:
+                            result.banners.append(banner)
+                            if board is not None:
+                                _write_injection_marker(board, tool, banner)
+                    framed = _q.quarantine_wrap(body, source=_q.MCP,
+                                                provenance=tool)
+                except Exception:  # noqa: BLE001 — fail-open to the legacy frame
+                    framed = frame_untrusted(body, label=f"{tool} result")
+            else:
+                framed = frame_untrusted(body, label=f"{tool} result")
             result.evidence.append(framed)
             result.calls.append({"tool": tool, "args": call_args, "ok": ok})
             if board is not None:
                 _write_board_marker(board, tool, ok)
+            # §9.8: a live search for a time-sensitive fact → a one-shot
+            # "verifying current facts" chip (surfaced by the supervisor).
+            if (not _verifying_sent and board is not None
+                    and _fresh_tier in ("volatile", "slow")
+                    and ("search" in tool or "web" in tool)):
+                _write_verifying_marker(board, _fresh_tier)
+                _verifying_sent = True
             # feed the result back and let the model decide the next step
             convo.append({"role": "assistant", "content": raw.strip()[:2000]})
             convo.append({"role": "user", "content": framed})
@@ -277,6 +337,31 @@ def _write_board_marker(board, tool: str, ok: bool) -> None:
     supervisor as a `tool` SSE event). Never raises."""
     try:
         board.write(f"tool:{tool}", {"status": "done" if ok else "error"},
+                    agent="tool_loop")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _write_injection_marker(board, tool: str, banner: str) -> None:
+    """Best-effort §9.9 injection-banner marker on the blackboard — a source that
+    contains instruction-like text. The FE surfaces it as a source-card banner
+    ('this source contains instructions — treated as data only'). Never raises."""
+    try:
+        board.write(f"injection:{tool}",
+                    {"status": "flagged", "banner": banner, "source": tool},
+                    agent="tool_loop")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _write_verifying_marker(board, tier: str) -> None:
+    """Best-effort §9.8 freshness marker — the answer is being checked against a
+    live search for a time-sensitive fact. The FE surfaces it as a calm
+    'verifying current facts' notice. Never raises."""
+    try:
+        board.write("verifying:facts",
+                    {"status": "verifying", "tier": tier,
+                     "note": "Verifying current facts…"},
                     agent="tool_loop")
     except Exception:  # noqa: BLE001
         pass

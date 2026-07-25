@@ -188,6 +188,43 @@ async def solve_text(body: SolveTextRequest) -> StreamingResponse:
 
     async def gen() -> AsyncGenerator[str, None]:
         yield _sse("meta", {"language": body.language or "python"})
+
+        # §3.5 toolchain prefetch: the target language is known upfront here, so
+        # warm its runtime OFF the request path while the solution streams — the
+        # verifier then starts hot. Best-effort; no-op unless enabled.
+        try:
+            from app.sandbox import pool as _pool
+            if _pool.prefetch_enabled():
+                _pool.prefetch_toolchain(body.language or "python")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # §3.2 problem-fingerprint cache: an identical problem+language already
+        # solved is re-served instantly (no re-reasoning). Per-user scoped +
+        # revalidated; a miss / disabled falls straight through to the solver.
+        _fp_scope = ""
+        try:
+            from storage.context import get_request_user_id as _uid
+            _fp_scope = str(_uid() or "")
+        except Exception:  # noqa: BLE001
+            _fp_scope = ""
+        try:
+            from app.solve import fingerprint as _fp
+            _cached = await _fp.get(body.problem, body.language or "",
+                                    scope=_fp_scope)
+        except Exception:  # noqa: BLE001
+            _cached = None
+        if _cached:
+            _step = 240
+            for _ci in range(0, len(_cached), _step):
+                yield _sse("token", {"text": _cached[_ci:_ci + _step]})
+            solve_id = await _persist_solve(
+                description=body.problem, response=_cached, source="text",
+                language=body.language,
+                latency_ms=int(time.time() * 1000) - started_ms)
+            yield _sse("done", {"solve_id": solve_id, "cached": True})
+            return
+
         collected: list[str] = []
         try:
             async for chunk in code_solver.solve_text(body.problem, body.language):
@@ -229,6 +266,14 @@ async def solve_text(body: SolveTextRequest) -> StreamingResponse:
                             ]
                         },
                     )
+        except Exception:  # noqa: BLE001
+            pass
+
+        # §3.2 cache the fresh solution so the next identical ask is instant.
+        try:
+            from app.solve import fingerprint as _fp
+            await _fp.put(body.problem, body.language or "", full_response,
+                          scope=_fp_scope)
         except Exception:  # noqa: BLE001
             pass
 
@@ -293,31 +338,72 @@ async def solve_image(
 
         collected: list[str] = []
         extracted_problem: str | None = None
+
+        # Stage-4 §3.2 — structured extraction (JSON contract) + language ladder
+        # + problem-fingerprint cache, ahead of the reasoning step. Flag-gated
+        # (`code_solver.structured_extraction`) + fail-open: any hiccup drops back
+        # to today's delimited OCR path inside solve_image.
+        _pre_extracted: str | None = None
+        _pre_language: str | None = language
+        _fp: str | None = None
+        _served_from_cache = False
         try:
-            async for item in code_solver.solve_image(
-                raw,
-                language=language,
-                extra_context=extra_context,
-                vision_model=vision_model,
-                code_model=code_model,
-            ):
-                if isinstance(item, code_solver.SolveStatus):
-                    yield _sse("status", {"text": item.text})
-                elif isinstance(item, code_solver.SolveExtracted):
-                    # OCR'd problem text — captured for persistence and
-                    # also surfaced to the UI so the user sees what was
-                    # read before the answer streams.
-                    extracted_problem = item.text
-                    yield _sse("extracted", {"text": item.text})
-                else:
-                    collected.append(item)
-                    yield _sse("token", {"text": item})
-        except LLMError as exc:
-            yield _sse("error", {"detail": str(exc)})
-            return
-        except Exception as exc:  # noqa: BLE001
-            yield _sse("error", {"detail": f"Unexpected error: {exc}"})
-            return
+            from app.codeintel import solve_extract as _sx
+            from app.codeintel import solve_fingerprint as _sfp
+            if _sx.enabled():
+                _got = await _sx.extract_structured(
+                    raw, vision_model=vision_model, extra_context=extra_context)
+                if _got is not None:
+                    _lang, _src = _sx.resolve_language(_got, requested=language)
+                    _pre_language = _lang or language
+                    _pre_extracted = _got.to_delimited()
+                    yield _sse("status", {"text": _got.summary()})
+                    _fp = _sfp.fingerprint(_got.statement, _pre_language)
+                    _cached = _sfp.get(_fp)
+                    if _cached:
+                        # An already-solved problem returns instantly.
+                        extracted_problem = _pre_extracted
+                        yield _sse("extracted", {"text": _pre_extracted})
+                        collected.append(_cached)
+                        yield _sse("token", {"text": _cached})
+                        _served_from_cache = True
+        except Exception:  # noqa: BLE001
+            _pre_extracted, _fp = None, None
+
+        if not _served_from_cache:
+            try:
+                async for item in code_solver.solve_image(
+                    raw,
+                    language=language,
+                    extra_context=extra_context,
+                    vision_model=vision_model,
+                    code_model=code_model,
+                    pre_extracted=_pre_extracted,
+                    pre_language=_pre_language,
+                ):
+                    if isinstance(item, code_solver.SolveStatus):
+                        yield _sse("status", {"text": item.text})
+                    elif isinstance(item, code_solver.SolveExtracted):
+                        # The extracted problem text — captured for persistence
+                        # and surfaced to the UI before the answer streams.
+                        extracted_problem = item.text
+                        yield _sse("extracted", {"text": item.text})
+                    else:
+                        collected.append(item)
+                        yield _sse("token", {"text": item})
+            except LLMError as exc:
+                yield _sse("error", {"detail": str(exc)})
+                return
+            except Exception as exc:  # noqa: BLE001
+                yield _sse("error", {"detail": f"Unexpected error: {exc}"})
+                return
+            # Cache the fresh solution under the problem fingerprint (§3.2).
+            if _fp and collected:
+                try:
+                    from app.codeintel import solve_fingerprint as _sfp2
+                    _sfp2.put(_fp, "".join(collected))
+                except Exception:  # noqa: BLE001
+                    pass
 
         # Description: prefer the OCR'd problem (two-step pipeline);
         # otherwise fall back to mining the streamed response for its
@@ -403,15 +489,30 @@ async def list_solve_sessions(
     ]
 
 
+async def _owned_solve_or_404(session, solve_id):
+    """Fetch a solve session and verify it belongs to the current user (§10.1c).
+    Legacy NULL-owned rows stay accessible (pre-accounts data)."""
+    from app.api.auth import resolve_user_id
+    from storage.models import SolveSession
+    try:
+        row = await session.get(SolveSession, uuid.UUID(solve_id))
+    except (TypeError, ValueError):
+        row = None
+    if row is None:
+        raise HTTPException(status_code=404, detail="Solve session not found")
+    uid = await resolve_user_id()
+    if row.user_id is not None and uid is not None and row.user_id != uid:
+        raise HTTPException(status_code=404, detail="Solve session not found")
+    return row
+
+
 @router.get("/sessions/{solve_id}")
 async def get_solve_session(
     solve_id: str,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """One solve with the full problem statement + response."""
-    row = await SolveRepo(session).get(solve_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Solve session not found")
+    row = await _owned_solve_or_404(session, solve_id)
     return {
         "id": str(row.id),
         "title": row.title,
@@ -439,19 +540,12 @@ async def patch_solve_session(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Rename a solve session. Returns the updated row summary."""
-    from storage.models import SolveSession
-
     if body.title is None:
         raise HTTPException(status_code=400, detail="`title` is required")
     new_title = body.title.strip()
     if not new_title:
         raise HTTPException(status_code=400, detail="`title` cannot be empty")
-    try:
-        row = await session.get(SolveSession, uuid.UUID(solve_id))
-    except (TypeError, ValueError):
-        row = None
-    if row is None:
-        raise HTTPException(status_code=404, detail="Solve session not found")
+    row = await _owned_solve_or_404(session, solve_id)
     row.title = new_title[:200]
     await session.commit()
     await session.refresh(row)
@@ -470,6 +564,7 @@ async def delete_solve_session(
     """Remove one solve from history. The blob (if any) is left on
     disk — orphaned blobs are cheap and a periodic GC job is the
     right place to clean them up."""
+    await _owned_solve_or_404(session, solve_id)  # owner-only
     ok = await SolveRepo(session).delete(solve_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Solve session not found")
@@ -490,9 +585,7 @@ async def get_solve_image(
     """
     from fastapi.responses import Response as _Response
 
-    row = await SolveRepo(session).get(solve_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Solve session not found")
+    row = await _owned_solve_or_404(session, solve_id)
     if not row.image_path:
         raise HTTPException(status_code=404, detail="No image stored for this solve")
 

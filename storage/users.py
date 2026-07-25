@@ -27,7 +27,12 @@ async def ensure_default_user() -> uuid.UUID | None:
 
 
 def get_default_user_id() -> uuid.UUID | None:
-    """Legacy alias — delegates to [get_device_user_id]."""
+    """The current owner: the authenticated user when a request is signed in
+    (§10.1c), else the device user — so sync callers scope per-user too."""
+    from storage.context import get_request_user_id
+    auth_uid = get_request_user_id()
+    if auth_uid is not None:
+        return auth_uid
     return get_device_user_id()
 
 

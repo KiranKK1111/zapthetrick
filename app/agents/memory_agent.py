@@ -32,6 +32,9 @@ class MemoryAgent(Agent):
         extras = board.get("extras", {}) or {}
         db_session = extras.get("db_session")
         session_id = extras.get("session_id")
+        # Scope memory recall to THIS user's collection (§10.1c) — the same
+        # user_id the write path stamps, so reads hit the right vector store.
+        user_id = extras.get("user_id")
         # §17: when the conversation is in a project, recall scopes to the whole
         # project (every sibling chat), not just this session.
         project_id = extras.get("project_id")
@@ -49,14 +52,14 @@ class MemoryAgent(Agent):
         try:
             episodes = await search_episodes_similar(
                 db_session, question, session_id=session_id,
-                project_id=project_id, top_k=3
+                user_id=user_id, project_id=project_id, top_k=3
             )
         except Exception:
             episodes = []
         try:
             skills = await relevant_skills_for_question(
                 db_session, question, session_id=session_id,
-                project_id=project_id, top_k=3
+                user_id=user_id, project_id=project_id, top_k=3
             )
         except Exception:
             skills = []

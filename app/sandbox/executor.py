@@ -39,7 +39,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 log = logging.getLogger(__name__)
 
@@ -505,6 +505,73 @@ def run_command(argv: list[str], *, workdir: str,
             duration_ms=int((time.monotonic() - started) * 1000))
 
 
+def _hardening_block(code: str) -> SandboxResult | None:
+    """Pre-run sandbox-policy scan for the LOCAL backend (P4 #19). On a backend
+    that can't isolate the network (rlimit / subprocess), refuse a script that
+    opens a socket, shells out to a net tool, or reads system secrets BEFORE it
+    runs — the OS wouldn't contain it. Namespace (bwrap) already denies those, so
+    there it's advisory only. Returns a blocking SandboxResult, or None to allow.
+    Never raises (a hardening hiccup must never break a clean run)."""
+    try:
+        from app.core.config_loader import cfg as _cfg
+        if not bool(getattr(_cfg.sandbox, "hardening_enabled", True)):
+            return None
+        from app.sandbox import hardening
+        rep = hardening.assess(code or "",
+                               net_isolated=isolation_level() == "namespace")
+        if rep.blocked:
+            top = rep.findings[0] if rep.findings else None
+            return SandboxResult(
+                status="error",
+                backend=isolation_level(),
+                reason=("blocked by sandbox policy: "
+                        f"{top.detail if top else 'escape attempt'} — "
+                        "network/secret access is not permitted on this "
+                        "sandbox backend"),
+            )
+    except Exception:  # noqa: BLE001 — hardening must never break a clean run
+        pass
+    return None
+
+
+def _stage_workspace(ws: str, main_name: str, code: str,
+                     files: dict[str, str] | None) -> None:
+    """Write the script + any staged files into `ws`, confining every path to
+    the workspace (no `../` escape)."""
+    pathlib.Path(ws, main_name).write_text(code or "", encoding="utf-8")
+    for rel, content in (files or {}).items():
+        p = pathlib.Path(ws) / pathlib.PurePosixPath(rel)
+        if ".." in p.relative_to(ws).parts:
+            continue
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+
+def _acquire_ws() -> tuple[str, bool]:
+    """A workspace for one run: a warm one from the pool when `sandbox.warm_pool`
+    is on, else a cold `mkdtemp`. Returns (path, from_pool). Fail-open — any pool
+    error degrades to the cold path."""
+    try:
+        from app.sandbox import pool
+        if pool.pool_enabled():
+            return pool.get_pool().acquire(), True
+    except Exception:  # noqa: BLE001
+        pass
+    return tempfile.mkdtemp(prefix="dtt-sbx-"), False
+
+
+def _release_ws(ws: str, from_pool: bool) -> None:
+    """Destroy the workspace — throw the world away, whether pooled or cold."""
+    if from_pool:
+        try:
+            from app.sandbox import pool
+            pool.get_pool().release(ws)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    shutil.rmtree(ws, ignore_errors=True)
+
+
 def run_code(code: str, language: str = "python", *,
              files: dict[str, str] | None = None,
              limits: SandboxLimits | None = None,
@@ -557,38 +624,12 @@ def run_code(code: str, language: str = "python", *,
         return SandboxResult(status="unavailable",
                              reason=f"language not supported: {language}")
     main_name, commands = plan
-    # Sandbox hardening (P4 #19): on a backend that can't isolate the network
-    # (rlimit / subprocess), refuse a script that opens a socket, shells out to a
-    # net tool, or reads system secrets BEFORE it runs — the OS wouldn't contain
-    # it. Namespace (bwrap) already denies those, so there it's advisory only.
+    block = _hardening_block(code or "")
+    if block is not None:
+        return block
+    ws, from_pool = _acquire_ws()
     try:
-        from app.core.config_loader import cfg as _cfg
-        if bool(getattr(_cfg.sandbox, "hardening_enabled", True)):
-            from app.sandbox import hardening
-            rep = hardening.assess(
-                code or "", net_isolated=isolation_level() == "namespace")
-            if rep.blocked:
-                top = rep.findings[0] if rep.findings else None
-                return SandboxResult(
-                    status="error",
-                    backend=isolation_level(),
-                    reason=("blocked by sandbox policy: "
-                            f"{top.detail if top else 'escape attempt'} — "
-                            "network/secret access is not permitted on this "
-                            "sandbox backend"),
-                )
-    except Exception:  # noqa: BLE001 — hardening must never break a clean run
-        pass
-    ws = tempfile.mkdtemp(prefix="dtt-sbx-")
-    try:
-        pathlib.Path(ws, main_name).write_text(code or "", encoding="utf-8")
-        for rel, content in (files or {}).items():
-            p = pathlib.Path(ws) / pathlib.PurePosixPath(rel)
-            # Confine staged files to the workspace (no ../ escape).
-            if ".." in p.relative_to(ws).parts:
-                continue
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
+        _stage_workspace(ws, main_name, code or "", files)
         # Compiled languages: run each step (compile → run) in sequence; the
         # first non-OK step (e.g. a compile error) is the honest result — a
         # compile failure is "not verified" with the compiler output as
@@ -602,7 +643,7 @@ def run_code(code: str, language: str = "python", *,
                 return res
         return res
     finally:
-        shutil.rmtree(ws, ignore_errors=True)
+        _release_ws(ws, from_pool)
 
 
 def run_batch(code: str, language: str = "python", *,
@@ -649,9 +690,37 @@ def run_batch(code: str, language: str = "python", *,
         _dcmds = lang_registry.augment_multifile(lang, _dmain, _dcmds, files)
         return docker_exec.run_batch(_dmain, _dcmds, code or "", files, limits,
                                      stdins)
-    # Local backend: correct but not compile-shared.
-    return [run_code(code, language, files=files, limits=limits,
-                     version=version, stdin=s) for s in stdins]
+
+    # LOCAL backend: compile ONCE, run many (Stage-4 §3.1 compile-once-run-many).
+    # Stage a single workspace, run every command EXCEPT the final run step once
+    # (compile/stage), then feed each stdin through the final run command against
+    # the already-built artifact — matching the docker path's semantics. Falls
+    # back to a compile failure broadcast so a bad compile is the honest result
+    # for every input (never a false pass).
+    plan = _lang_plan(lang, code or "")
+    if plan is None or (allowed and lang not in allowed):
+        return [SandboxResult(status="unavailable",
+                              reason=f"language not supported: {language}")
+                for _ in stdins]
+    main_name, commands = plan
+    block = _hardening_block(code or "")
+    if block is not None:
+        return [replace(block) for _ in stdins]
+    ws, from_pool = _acquire_ws()
+    try:
+        _stage_workspace(ws, main_name, code or "", files)
+        # Compile / stage once — every command except the final run command.
+        for argv in commands[:-1]:
+            cres = run_command(argv, workdir=ws, limits=limits)
+            if not cres.ok:
+                # A compile failure is the honest result for EVERY input
+                # (distinct copies so a caller mutating one can't alias the rest).
+                return [replace(cres) for _ in stdins]
+        run_argv = commands[-1]
+        return [run_command(run_argv, workdir=ws, limits=limits, stdin_data=s)
+                for s in stdins]
+    finally:
+        _release_ws(ws, from_pool)
 
 
 def verify_script(code: str, language: str = "python", *,

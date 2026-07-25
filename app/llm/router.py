@@ -15,9 +15,9 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.llm import crypto, ratelimit
 from app.llm.catalog import _size_billions, get_provider_spec
@@ -26,6 +26,18 @@ from storage.db import get_session_factory
 from storage.models import LLMApiKey, LLMFallbackConfig, LLMModel
 
 log = logging.getLogger(__name__)
+
+
+def _route_user_id():
+    """The current request's user id for per-user key selection (§10.1c). None
+    (anonymous / auth-off) → the legacy global keys (``user_id IS NULL``).
+    contextvars propagate into tasks spawned during the request, so background
+    routing keeps the same user scope."""
+    try:
+        from storage.context import get_request_user_id
+        return get_request_user_id()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class NoRouteAvailable(RuntimeError):
@@ -49,6 +61,11 @@ class RouteResult:
     display_name: str
     api_key: str
     key_id: int
+    # Never-empty ladder (§2.1) provenance — set by select_route(), surfaced by
+    # the engine onto meta.route / meta.degraded. Defaults keep every existing
+    # RouteResult(...) construction valid and behaviour identical.
+    rung: str = "T1"
+    degraded: list = field(default_factory=list)
 
 
 # ── Dynamic priority: 429 penalty with time decay (in-memory) ────────────
@@ -232,7 +249,9 @@ def _candidate_score(penalty: int, headroom: float,
                      task_match: float = 1.0, learned: float = 1.0,
                      *, task_w: float | None = None, learn_w: float | None = None,
                      latency_factor: float = 1.0, latency_w: float = 0.0,
-                     quota_headroom: float = 1.0, quota_w: float = 0.0) -> float:
+                     quota_headroom: float = 1.0, quota_w: float = 0.0,
+                     verify_pass: float = 1.0, verify_w: float = 0.0,
+                     speed_scale: float = 1.0) -> float:
     """Routing score for one model (lower = picked first). Difficulty decides:
     trivial weights SPEED (fast small model), hard/expert weight INTELLIGENCE
     (big capable model). The static base/capability order is NOT in the score —
@@ -251,6 +270,10 @@ def _candidate_score(penalty: int, headroom: float,
     None → read the helper, preserving byte-identical behavior for other
     callers."""
     intel_w, speed_w = _DIFFICULTY.get(difficulty, _DIFFICULTY["standard"])
+    # §2.6 TTFT/TPS matrix: the profile MODULATES difficulty's speed emphasis
+    # (1.0 = neutral). Reasoning profiles pass <1 (down-weight speed → smarter
+    # model wins); latency-sensitive profiles pass ≥1. Caller precomputes it.
+    speed_w = speed_w * max(0.0, speed_scale)
     _tw = _task_weight() if task_w is None else task_w
     _lw = _learn_weight() if learn_w is None else learn_w
     return (
@@ -262,6 +285,10 @@ def _candidate_score(penalty: int, headroom: float,
         + _lw * (1.0 - max(0.0, min(1.0, learned)))
         + latency_w * (1.0 - max(0.0, min(1.0, latency_factor)))
         + quota_w * (1.0 - max(0.0, min(1.0, quota_headroom)))
+        # §2.6 — measured verify-pass rate for this (identity, profile). A model
+        # whose code repeatedly fails the sandbox for this profile is rotated
+        # away from BEFORE it wastes another turn. Weight 0 → today's ranking.
+        + verify_w * (1.0 - max(0.0, min(1.0, verify_pass)))
     )
 
 
@@ -291,7 +318,7 @@ def _learn_weight() -> float:
         return 0.0
 
 
-def _quota_state() -> dict[str, tuple[float, bool]]:
+def _quota_state(for_live: bool = False) -> dict[str, tuple[float, bool]]:
     """Read the proactive free-tier ledger ONCE per request (hot path):
     ``platform -> (headroom_fraction 0..1, exhausted)``.
 
@@ -300,7 +327,12 @@ def _quota_state() -> dict[str, tuple[float, bool]]:
     ABSENT from the map, and the caller treats a miss as (1.0, False): full
     headroom, not exhausted → no ranking effect. Any error returns `{}` so the
     router scores exactly as it does today. Never let quota bookkeeping break
-    routing (fail-open)."""
+    routing (fail-open).
+
+    When §2.7 `quota_planning` is on, the per-`(provider, key)` planner OVERLAYS
+    this: its reserve-adjusted best-key fraction replaces the coarse per-provider
+    reactive number, so a non-Live turn "sees" less headroom on a reserved
+    provider and rotates off it before eating Live's slice."""
     try:
         from app.llm.quota_manager import quota_manager
         qm = quota_manager()
@@ -313,6 +345,19 @@ def _quota_state() -> dict[str, tuple[float, bool]]:
                 continue          # unlimited / unknown → no proactive signal
             frac = max(0.0, min(1.0, float(left) / float(limit)))
             out[prov] = (frac, bool(qm.exhausted(prov)))
+        # §2.7 planning overlay (reserve/spread-aware, per-key).
+        try:
+            from app.llm import quota_plan as _qp
+            if _qp.enabled():
+                planner = _qp.quota_planner()
+                provs = {str(r.get("provider") or "").strip().lower()
+                         for r in planner.snapshot()}
+                for prov in provs:
+                    sig = planner.provider_signal(prov, for_live=for_live)
+                    if sig is not None:
+                        out[prov] = sig    # planner is more accurate → it wins
+        except Exception:  # noqa: BLE001 — planning overlay is best-effort
+            pass
         return out
     except Exception:  # noqa: BLE001 — never let quota bookkeeping break routing
         return {}
@@ -329,6 +374,54 @@ def _quota_pool(pool: list[dict]) -> list[dict]:
     backoff behaviour is preserved). Pure + side-effect-free."""
     live = [c for c in pool if not c.get("quota_exhausted")]
     return live or pool
+
+
+def _quarantine_pool(pool: list[dict]) -> list[dict]:
+    """§2.5 — drop candidates whose `(CanonicalId, provider)` pair hasn't passed
+    the gauntlet yet (unproven can't outrank known-good). Availability wins: if
+    filtering would empty the pool, return it untouched (the wide-fallback rung
+    T3 also passes `allow_quarantined=True` to skip this entirely). Pure."""
+    try:
+        from app.llm import gauntlet as _g
+        if not _g.enabled():
+            return pool
+        from app.llm.identity import canonicalize as _canon
+        live = []
+        for c in pool:
+            m = c["model"]
+            cid = c.get("cid") or _canon(m.platform, m.model_id).key()
+            if not _g.is_quarantined(cid, m.platform):
+                live.append(c)
+        return live or pool           # never manufacture an empty set
+    except Exception:  # noqa: BLE001 — quarantine must never break routing
+        return pool
+
+
+def _two_stage_order(pool: list[dict]) -> list[dict]:
+    """§2.4 two-stage try-order. STAGE 1 — group candidates by canonical identity
+    and rank the identities by their provider-INDEPENDENT quality (the best/min
+    `quality` in the group; stable across providers). STAGE 2 — within an
+    identity, order the providers by the full transient `score` (quota / latency /
+    breaker / spread), with LRU as the tiebreak so equal-score providers rotate.
+
+    Flattening these gives: the best model first, its best provider first, then
+    that SAME model's other providers, then the next model — so a provider drop
+    fails over to the same model elsewhere before a different model. Pure; the
+    set is unchanged (never-empty preserved), only the order differs."""
+    groups: dict[str, list[dict]] = {}
+    for c in pool:
+        groups.setdefault(c.get("cid") or f"_{id(c)}", []).append(c)
+
+    def _identity_quality(members: list[dict]) -> float:
+        return min(m.get("quality", m["score"]) for m in members)
+
+    out: list[dict] = []
+    for members in sorted(groups.values(), key=_identity_quality):
+        members.sort(key=lambda c: (c["score"],
+                                    _last_used.get(c["model"].id, 0.0),
+                                    c.get("order", 0)))
+        out.extend(members)
+    return out
 
 
 def _legacy_candidate_score(order_idx: int, penalty: int, headroom: float,
@@ -414,10 +507,12 @@ async def route_request(
     difficulty: str = "standard",
     avoid_model_db_id: int | None = None,
     task_category: str | None = None,
+    task_profile: str | None = None,
     needs_tool: bool = False,
     needs_json: bool = False,
     query_embedding: list[float] | None = None,
     trace: list | None = None,
+    allow_quarantined: bool = False,
 ) -> RouteResult:
     """Return the highest-priority model+key that can serve this request.
 
@@ -447,19 +542,29 @@ async def route_request(
         pass
 
     async with factory() as session:
+        # This request's user — scope the catalog to THEIR models + the shared
+        # on-pod local floor (§10.1c). Anonymous / auth-off → user_id IS NULL
+        # (legacy/global rows) + local, i.e. byte-identical to single-user today.
+        _uid_scope = _route_user_id()
+        _user_models = or_(
+            LLMModel.user_id == _uid_scope, LLMModel.platform == "local")
         # Fallback chain joined to its models (only enabled models).
         rows = (
             await session.execute(
                 select(LLMFallbackConfig, LLMModel)
                 .join(LLMModel, LLMFallbackConfig.model_db_id == LLMModel.id)
-                .where(LLMFallbackConfig.enabled.is_(True), LLMModel.enabled.is_(True))
+                .where(LLMFallbackConfig.enabled.is_(True),
+                       LLMModel.enabled.is_(True), _user_models)
                 .order_by(LLMFallbackConfig.priority.asc())
             )
         ).all()
-        # Candidate keys grouped by platform (enabled + not-known-bad).
+        # Candidate keys grouped by platform (enabled + not-known-bad), scoped to
+        # THIS request's user (§10.1c per-user keys). Anonymous / auth-off →
+        # user_id IS NULL, i.e. the legacy global keys — byte-identical to today.
         key_rows = (
             await session.execute(
                 select(LLMApiKey).where(
+                    LLMApiKey.user_id == _route_user_id(),
                     LLMApiKey.enabled.is_(True),
                     LLMApiKey.status.in_(("healthy", "unknown")),
                 )
@@ -526,8 +631,73 @@ async def route_request(
         _quota_exh_pen = float(_rcf("quota_exhausted_penalty",
                                     _QUOTA_EXHAUSTED_PENALTY))
         _quota_skip = bool(_rcf("quota_skip_exhausted", True)) and _quota_aware
+        # A Live turn may draw on the §2.7 reserve; a non-Live turn sees headroom
+        # minus the reserve, so it rotates off a reserved provider first.
+        _for_live = (task_profile or "").strip() in ("live_answer", "live_code")
         # One ledger read per request (not per candidate). {} on any error.
-        _quota_map = _quota_state() if _quota_aware else {}
+        _quota_map = _quota_state(_for_live) if _quota_aware else {}
+        # §2.4 two-stage selection (MODEL→PROVIDER) + same-model failover. When
+        # on, the try-order is grouped by canonical identity: pick the best MODEL
+        # (provider-independent quality), then the best PROVIDER for it, and try
+        # that model's OTHER providers before a different model. Off → today's
+        # single-stage pick (byte-identical). `_intel_w` is the Stage-1 quality
+        # weight (identity rank is provider-independent, so failover survives a
+        # provider drop).
+        _two_stage = bool(_rcf("two_stage", False))
+        _intel_w, _ = _DIFFICULTY.get(difficulty, _DIFFICULTY["standard"])
+        # §2.7 spread (Component D) → the Stage-2 provider-rotation term: a
+        # draining key of one identity's provider is penalized so routine traffic
+        # rotates across the identity's providers/keys, keeping all quotas alive.
+        _spread_on = False
+        _spread_w = 0.0
+        _spread_planner = None
+        try:
+            from app.llm import quota_plan as _qplan
+            if _qplan.spread_enabled():
+                _spread_on = True
+                _spread_w = float(_rcf("spread_weight", 8.0))
+                _spread_planner = _qplan.quota_planner()
+        except Exception:  # noqa: BLE001
+            _spread_on = False
+        # §2.6 — measured verify-pass penalty per (model-identity, profile).
+        # Weight 0 (flag off / no profile / error) → byte-identical ranking.
+        # Helpers hoisted out of the loop (read once per request).
+        _profile = (task_profile or "").strip() or None
+        _verify_w = 0.0
+        _verify_rate = None
+        _id_key = None
+        if _profile:
+            try:
+                from app.llm import scorecards as _sc
+                _verify_w = _sc.profile_verify_weight()
+                if _verify_w:
+                    from app.llm.identity import identity_key as _id_key
+                    _verify_rate = _sc.verify_pass_rate
+            except Exception:  # noqa: BLE001
+                _verify_w = 0.0
+        # §2.6 TTFT/TPS weight matrix — the profile's speed/latency emphasis
+        # modulates the score. `_speed_scale` scales difficulty's speed_rank term
+        # (1.0 = neutral); a high-TTFT profile also ENABLES a latency term even
+        # when the global latency_aware flag is off. Flag-gated → 1.0/no-op.
+        _speed_scale = 1.0
+        if _profile and bool(_rcf("profile_weight_matrix", False)):
+            try:
+                from app.llm import profiles as _profs
+                _prof = _profs.profile(_profile)
+                if _prof is not None:
+                    # Normalize by "high" (=2.0) so a high-emphasis profile is
+                    # neutral; low → down-weight, highest → up-weight.
+                    _base = _profs._HIGH or 2.0
+                    _speed_scale = max(0.0, _prof.tps_wt / _base)
+                    _ttft_scale = max(0.0, _prof.ttft_wt / _base)
+                    # A high-TTFT profile leans on first-token speed: turn on the
+                    # observed-latency term (profile-scoped) if it isn't already.
+                    if _prof.ttft_wt >= _base and _latency_w <= 0.0:
+                        _latency_w = float(_rcf("profile_latency_weight", 0.15))
+                        _latency_aware = True
+                    _latency_w = _latency_w * _ttft_scale
+            except Exception:  # noqa: BLE001
+                _speed_scale = 1.0
         # Perceived-health tracker (observed latency + circuit-breaker state).
         # Only consulted when latency_aware / circuit_breaker are on.
         _health = None
@@ -557,7 +727,7 @@ async def route_request(
                 _learned_success = None
         if require_vision or route_all:
             enabled_ids = {m.id for _, m in rows}
-            stmt = select(LLMModel)
+            stmt = select(LLMModel).where(_user_models)  # scope to this user
             if require_vision:
                 stmt = stmt.where(LLMModel.supports_vision.is_(True))
             extra_models = [
@@ -696,6 +866,15 @@ async def route_request(
         # Unknown provider / unlimited window / quota off → (1.0, False) = today.
         _q_frac, _q_exhausted = _quota_map.get(
             (model.platform or "").lower(), (1.0, False))
+        # §2.6 measured verify-pass rate for this (identity, profile) — 1.0
+        # (neutral) when unmeasured / off.
+        _vp = 1.0
+        if _verify_w and _verify_rate is not None and _id_key is not None:
+            try:
+                _vp = _verify_rate(
+                    _id_key(model.platform, model.model_id), _profile)
+            except Exception:  # noqa: BLE001
+                _vp = 1.0
         score = _candidate_score(
             penalty, hr,
             getattr(model, "intelligence_rank", 100),
@@ -704,7 +883,36 @@ async def route_request(
             task_w=_task_w, learn_w=_learn_w,
             latency_factor=_lat_factor, latency_w=_latency_w,
             quota_headroom=_q_frac, quota_w=_quota_w,
+            verify_pass=_vp, verify_w=_verify_w,
+            speed_scale=_speed_scale,
         )
+        # §2.7 spread → Stage-2 provider rotation: penalize a draining key so the
+        # identity's traffic fans out across its providers (0 when spread off).
+        if _spread_on and _spread_planner is not None:
+            try:
+                _kid = getattr(best_key, "id", None)
+                score += _spread_w * _spread_planner.spread_penalty(
+                    model.platform, _kid)
+            except Exception:  # noqa: BLE001
+                pass
+        # §2.4 Stage-1 quality: a PROVIDER-INDEPENDENT score (model quality only —
+        # intelligence + task-match + learned + verify-pass; NO quota/latency/
+        # penalty). Stable across a model's providers, so the identity keeps its
+        # rank when one provider drops → same-model failover. Computed only when
+        # two-stage is on (its one use).
+        _quality = 0.0
+        _cid = None
+        if _two_stage:
+            _quality = (
+                _intel_w * (getattr(model, "intelligence_rank", 100) or 100)
+                + (_task_w or 0.0) * (1.0 - max(0.0, min(1.0, tm)))
+                + (_learn_w or 0.0) * (1.0 - max(0.0, min(1.0, learned)))
+                + (_verify_w or 0.0) * (1.0 - max(0.0, min(1.0, _vp))))
+            try:
+                from app.llm.identity import canonicalize as _canon
+                _cid = _canon(model.platform, model.model_id).key()
+            except Exception:  # noqa: BLE001
+                _cid = f"{model.platform}:{model.model_id}"
         # A provider whose free window is fully spent is a guaranteed 429 — bury
         # it. (`_quota_pool` below drops it outright while anything else is
         # routable; this keeps it last when it's all we have.)
@@ -727,6 +935,8 @@ async def route_request(
                        "supports_json": _supports_flag(model, "json"),
                        "quota_headroom": _q_frac,
                        "quota_exhausted": bool(_q_exhausted),
+                       "quality": _quality,       # §2.4 Stage-1 identity rank
+                       "cid": _cid,               # §2.4 canonical identity key
                        "free": _is_free(model, spec)})
 
     if not scored:
@@ -811,17 +1021,37 @@ async def route_request(
             if trace is not None:
                 trace.append({"quota_skipped": before - len(pool)})
 
+    # §2.5 onboarding gauntlet: below the wide-fallback rung, drop candidates
+    # whose (identity, provider) pair hasn't been probed yet — an unproven model
+    # can't outrank a known-good one. `allow_quarantined` (True at T3) skips this;
+    # availability still wins if it would empty the pool. No-op unless the
+    # gauntlet flag is on.
+    if not allow_quarantined:
+        before_q = len(pool)
+        pool = _quarantine_pool(pool)
+        if trace is not None and len(pool) < before_q:
+            trace.append({"quarantined_skipped": before_q - len(pool)})
+
     # Routing explainability (R10): record the considered candidates + scores.
+    # §2.4: when two-stage is on, also record the canonical identity so
+    # `meta.route` carries (canonical, provider) — the model chosen vs the
+    # provider serving it.
     if trace is not None:
-        for c in sorted(pool, key=lambda c: c["score"])[:8]:
-            trace.append({
+        _order = _two_stage_order(pool) if _two_stage else sorted(
+            pool, key=lambda c: c["score"])
+        for c in _order[:8]:
+            _entry = {
                 "model": c["model"].model_id,
                 "score": round(c["score"], 2),
                 "intel": c.get("intel"),
                 "task_match": round(c.get("task_match", 1.0), 3),
                 "quota": round(c.get("quota_headroom", 1.0), 3),
                 "free": c.get("free", True),
-            })
+            }
+            if _two_stage and c.get("cid"):
+                _entry["canonical"] = c["cid"]
+                _entry["provider"] = c["model"].platform
+            trace.append(_entry)
 
     # Sticky session: if the preferred model is routable right now, use it.
     if preferred_model_db_id is not None:
@@ -861,9 +1091,13 @@ async def route_request(
                               c.get("order", 0)))
     equiv_ids = {c["model"].id for c in equiv}
     rest = [c for c in pool if c["model"].id not in equiv_ids]
+    # §2.4 two-stage try-order: group by canonical identity so a model's OTHER
+    # providers are tried BEFORE a different model (same-model failover). Off →
+    # today's equiv+rest (byte-identical).
+    try_order = _two_stage_order(pool) if _two_stage else (equiv + rest)
     decrypt_failures = 0
     keyed_attempts = 0
-    for c in equiv + rest:
+    for c in try_order:
         res = _finalize(c["model"], c["key"], limits_for(c["model"]), skip_keys)
         if res is not None:
             _last_used[c["model"].id] = time.time()
@@ -885,6 +1119,159 @@ async def route_request(
     raise NoRouteAvailable(
         "All models exhausted. Add more API keys or wait for rate limits to reset."
     )
+
+
+def _ladder_enabled() -> bool:
+    """Whether the never-empty ladder (§2.1) wraps route selection. Default OFF
+    → select_route delegates to route_request and behaves byte-for-byte as
+    today. A module-level helper so tests can monkeypatch it directly."""
+    try:
+        from app.core.config_loader import get_config
+        return bool(getattr(get_config().routing, "ladder_v2", False))
+    except Exception:  # noqa: BLE001 — never let a config read change routing
+        return False
+
+
+@dataclass
+class RouteDecision:
+    """Outcome of the never-empty ladder (§2.1). ``route`` is None only when every
+    cloud rung (T0–T3) is exhausted AND no local floor (T4) exists yet — the
+    caller then tries the answer cache (T5) or a bounded retry. ``rung`` records
+    which rung answered (→ meta.route); ``degraded`` records why (→ meta.degraded);
+    ``transient`` mirrors NoRouteAvailable.transient so the caller can back off."""
+    route: RouteResult | None
+    rung: str = "T1"
+    degraded: list = field(default_factory=list)
+    transient: bool = False
+    local: bool = False
+
+
+async def select_route(
+    estimated_tokens: int = 1000,
+    skip_keys: set[str] | None = None,
+    preferred_model_db_id: int | None = None,
+    *,
+    require_vision: bool = False,
+    min_context: int | None = None,
+    difficulty: str = "standard",
+    avoid_model_db_id: int | None = None,
+    task_category: str | None = None,
+    task_profile: str | None = None,
+    needs_tool: bool = False,
+    needs_json: bool = False,
+    query_embedding: list[float] | None = None,
+    trace: list | None = None,
+) -> RouteDecision:
+    """Never-empty route selection (§2.1) — a fallback ladder that only widens:
+
+        T0  session-sticky model (via ``preferred_model_db_id``)
+        T1  requested tier, all hard filters
+        T2  tool/JSON capability filters relaxed to a preference
+        T3  widest — context + difficulty floors relaxed ("best that answers"),
+            require_vision kept (an image turn still needs an image model)
+        T4  local floor — reserved; no local generation engine exists yet
+        T5  answer cache — the caller's move (it holds the messages)
+
+    Flag OFF → delegates to ``route_request`` and raises exactly as before. Flag
+    ON → NEVER raises for an empty candidate set: an exhausted ladder returns
+    ``RouteDecision(route=None, …)`` so the empty set stops being a surfaced error.
+    """
+    kw = dict(
+        estimated_tokens=estimated_tokens, skip_keys=skip_keys,
+        preferred_model_db_id=preferred_model_db_id, require_vision=require_vision,
+        min_context=min_context, difficulty=difficulty,
+        avoid_model_db_id=avoid_model_db_id, task_category=task_category,
+        task_profile=task_profile,
+        needs_tool=needs_tool, needs_json=needs_json,
+        query_embedding=query_embedding, trace=trace,
+    )
+    if not _ladder_enabled():
+        route = await route_request(**kw)   # may raise NoRouteAvailable, as today
+        return RouteDecision(route=route, rung="T1")
+
+    transient = False
+
+    # T0 / T1 — sticky + full filters.
+    try:
+        route = await route_request(**kw)
+        rung = ("T0" if (preferred_model_db_id is not None
+                         and route.model_db_id == preferred_model_db_id)
+                else "T1")
+        return RouteDecision(route=route, rung=rung)
+    except NoRouteAvailable as exc:
+        transient = transient or bool(getattr(exc, "transient", False))
+
+    # T2 — relax the tool/JSON capability filters to a preference.
+    try:
+        route = await route_request(**{**kw, "needs_tool": False,
+                                       "needs_json": False})
+        return RouteDecision(route=route, rung="T2", degraded=["tier_fallback"])
+    except NoRouteAvailable as exc:
+        transient = transient or bool(getattr(exc, "transient", False))
+
+    # T3 — widest: drop the context + difficulty floors (keep require_vision).
+    # §2.5: this is the ONE rung where a quarantined (unprobed) model becomes
+    # selectable — the wide fallback can reach an unknown "in extremis" rather
+    # than fail, without ever letting it outrank a known-good model at T0–T2.
+    try:
+        route = await route_request(**{**kw, "needs_tool": False,
+                                       "needs_json": False, "min_context": None,
+                                       "difficulty": "standard",
+                                       "allow_quarantined": True})
+        return RouteDecision(route=route, rung="T3",
+                             degraded=["tier_fallback", "wide_fallback"])
+    except NoRouteAvailable as exc:
+        transient = transient or bool(getattr(exc, "transient", False))
+
+    # T4 local floor — an always-available on-pod model (llama.cpp). Inert until
+    # the runtime is baked + llm.local.enabled; once seeded it makes the ladder
+    # structurally never-empty (no key, no rate limit → cannot be unavailable).
+    local = await _local_floor_route()
+    if local is not None:
+        return RouteDecision(route=local, rung="T4", local=True,
+                             degraded=["local_floor"])
+
+    # T5 answer cache is the caller's move (it holds the messages). Signal
+    # exhaustion WITHOUT raising — the empty set is not a surfaced error.
+    return RouteDecision(route=None, rung="exhausted", transient=transient,
+                         degraded=["route_exhausted"])
+
+
+async def _local_floor_route() -> RouteResult | None:
+    """T4 floor (§2.1): a RouteResult for the always-available local model, or
+    None when the local runtime is disabled / not seeded. Anonymous (no key), no
+    rate limits. Never raises into the ladder."""
+    try:
+        from app.llm.catalog import local_enabled
+        if not local_enabled():
+            return None
+        factory = get_session_factory()
+        if factory is None:
+            return None
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    select(LLMModel).where(LLMModel.platform == "local",
+                                           LLMModel.enabled.is_(True)).limit(1)
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return None
+        return RouteResult("local", row.model_id, row.id, row.display_name, "", 0,
+                           rung="T4", degraded=["local_floor"])
+    except Exception:  # noqa: BLE001 — the floor must never raise into routing
+        return None
+
+
+async def local_model_db_id() -> int | None:
+    """The DB id of the seeded local model, or None when local is disabled."""
+    try:
+        from app.llm.catalog import local_enabled, local_model_id
+        if not local_enabled():
+            return None
+        return await model_db_id_for(local_model_id())
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _cost_pool(pool: list[dict], *, free_only: bool,

@@ -238,6 +238,8 @@ async def solve_image(
     *,
     vision_model: str | None = None,
     code_model: str | None = None,
+    pre_extracted: str | None = None,
+    pre_language: str | None = None,
 ) -> AsyncGenerator:
     """Stream a structured solution from a screenshot.
 
@@ -257,13 +259,15 @@ async def solve_image(
     Yields a mix of `str` (token text for the UI) and `SolveStatus`
     (status updates the route can surface as SSE `status` events).
     """
-    if cfg.code_solver.two_step_solve:
+    if cfg.code_solver.two_step_solve or pre_extracted:
         async for item in _solve_image_two_step(
             image_bytes,
             language,
             extra_context,
             vision_model_override=vision_model,
             code_model_override=code_model,
+            pre_extracted=pre_extracted,
+            pre_language=pre_language,
         ):
             yield item
         return
@@ -284,16 +288,31 @@ async def _solve_image_two_step(
     *,
     vision_model_override: str | None = None,
     code_model_override: str | None = None,
+    pre_extracted: str | None = None,
+    pre_language: str | None = None,
 ) -> AsyncGenerator:
     """Vision OCR -> structured text -> text/code reasoning model.
 
     Far more reliable on small local vision models (LLaVA, moondream)
     than asking them to read AND reason at once.
+
+    Stage-4 §3.2: when ``pre_extracted`` is supplied (the route ran the
+    structured JSON extraction), the OCR step is SKIPPED and that text is used
+    verbatim — the reasoning step is unchanged.
     """
     vision_model = vision_model_override or cfg.llm.vision_model or cfg.llm.model
     code_model = code_model_override or cfg.llm.code_model or cfg.llm.model
 
-    # Step 1 — OCR. Silent; we don't stream this to the UI.
+    # Step 1 — extraction. The structured path already did it (skip OCR); else
+    # run the vision OCR as before.
+    if pre_extracted and pre_extracted.strip():
+        cleaned = pre_extracted.strip()
+        yield SolveExtracted(cleaned)
+        async for item in _reason_over_problem(
+                cleaned, code_model, pre_language=pre_language):
+            yield item
+        return
+
     yield SolveStatus(f"Reading problem with {vision_model}…")
 
     encoded = base64.b64encode(image_bytes).decode("ascii")
@@ -345,7 +364,15 @@ async def _solve_image_two_step(
     # event by isinstance-check; the Flutter side ignores it for now.
     yield SolveExtracted(cleaned)
 
-    # Step 2 — Reasoning. Stream tokens.
+    async for item in _reason_over_problem(cleaned, code_model):
+        yield item
+
+
+async def _reason_over_problem(
+    cleaned: str, code_model: str, *, pre_language: str | None = None,
+) -> AsyncGenerator:
+    """Step 2 — reason over the (delimited) extracted problem and stream the
+    solution. Shared by the OCR path and the Stage-4 §3.2 structured path."""
     yield SolveStatus(f"Solving with {code_model}…")
 
     # The user message must make it absolutely clear that the "===" lines
@@ -353,6 +380,9 @@ async def _solve_image_two_step(
     # (llama3.1) read the section headings as field names and write code
     # that processes a JSON object with those fields — instead of solving
     # the coding problem inside the sections.
+    _lang_line = (
+        f"Solve in {pre_language}. " if (pre_language and pre_language.strip())
+        else "Match the language of the function signature. ")
     reason_user = (
         "Below is the structured content of a coding-interview problem.\n"
         "\n"
@@ -365,8 +395,8 @@ async def _solve_image_two_step(
         "and CONSTRAINTS, using the signature under FUNCTION SIGNATURE.\n"
         "\n"
         "Go straight to the three-section layout (## 1. Problem, ## 2. Solution "
-        "with code + complexity + optimizations, ## 3. Explanation). Match the "
-        "language of the function signature.\n"
+        "with code + complexity + optimizations, ## 3. Explanation). "
+        f"{_lang_line}\n"
         "\n"
         "------ BEGIN PROBLEM ------\n"
         f"{cleaned}\n"

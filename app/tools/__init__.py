@@ -8,6 +8,12 @@ from app.tools import persona_answer as _persona_answer  # noqa: F401
 from app.tools import resume_lookup as _resume_lookup  # noqa: F401
 from app.tools import web_search as _web_search  # noqa: F401
 
+# §8.4 conversation_search — hidden until `tool_loop.conversation_search` is on.
+try:
+    from app.tools import conversation_search as _conversation_search  # noqa: F401
+except Exception:  # noqa: BLE001 — never block startup on an optional tool
+    pass
+
 # Code knowledge graph query tools (code_search / code_callers / code_callees /
 # code_impact / code_file_structure) — registered on import.
 try:

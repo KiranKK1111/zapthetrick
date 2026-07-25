@@ -187,6 +187,26 @@ class Supervisor:
         self.latency_budget_ms = latency_budget_ms
 
     # ------------------------------------------------------------------
+    def retrieved_chunks(self) -> "list[dict]":
+        """The turn's retrieved+reranked evidence chunks as plain dicts
+        (`{text, source, id, score}`), read from this turn's board after the
+        stream. Empty when no board/evidence — the route uses these to ground
+        the completed answer to its sources (§8.3 span citations). Never raises.
+        """
+        try:
+            board = getattr(self, "_board", None)
+            ev = board.get(KEY_EVIDENCE) if board is not None else None
+            return [
+                {"text": getattr(c, "text", ""),
+                 "source": getattr(c, "source", ""),
+                 "id": getattr(c, "parent_id", "") or "",
+                 "score": getattr(c, "score", 0.0)}
+                for c in (getattr(ev, "chunks", None) or [])
+            ]
+        except Exception:  # noqa: BLE001
+            return []
+
+    # ------------------------------------------------------------------
     async def stream(
         self,
         question: str,
@@ -202,6 +222,11 @@ class Supervisor:
         `board.get("extras")`.
         """
         board = Blackboard()
+        # Expose this turn's board so the route layer can read post-stream slots
+        # (e.g. the retrieved+reranked evidence chunks) once the answer text is
+        # complete — needed to co-locate the answer with its sources for §8.3
+        # span citations. One Supervisor instance per request, so this is safe.
+        self._board = board
         board.write(
             "meta",
             Meta(
@@ -215,8 +240,10 @@ class Supervisor:
             board.write("extras", extras, agent="supervisor")
 
         # ---- intent + plan (P0, blocking) ----------------------------
+        # A voice turn skips the blocking planner (the persona defaults to the
+        # general intent) so the first spoken token isn't delayed by planning.
         planner = self.registry.get("planner")
-        if planner is not None:
+        if planner is not None and not self._fast_voice():
             await planner.run(board)
         intent = board.get(KEY_INTENT)
         yield SupervisorEvent("meta", {"intent": _intent_to_dict(intent)})
@@ -544,15 +571,32 @@ class Supervisor:
         return None, None, None
 
     # ------------------------------------------------------------------
+    def _fast_voice(self) -> bool:
+        """A voice turn asks for a near-instant SPOKEN reply — the persona
+        streams ALONE (no RAG/grounder/critic/memory mesh around it). Read from
+        the turn's extras. Never raises."""
+        try:
+            board = getattr(self, "_board", None)
+            ex = board.get("extras", {}) if board is not None else {}
+            return bool((ex or {}).get("voice"))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _p0_agents(self) -> Iterable[Agent]:
+        if self._fast_voice():
+            return []  # voice: persona only, for a fast spoken reply
         names = ["retriever", "grounder"]
         return [a for a in (self.registry.get(n) for n in names) if a is not None]
 
     def _p1_agents(self) -> Iterable[Agent]:
+        if self._fast_voice():
+            return []
         names = ["memory", "critic", "suggester"]
         return [a for a in (self.registry.get(n) for n in names) if a is not None]
 
     def _p2_agents(self) -> list[Agent]:
+        if self._fast_voice():
+            return []
         names = ["reflector"]
         return [a for a in (self.registry.get(n) for n in names) if a is not None]
 
@@ -592,6 +636,25 @@ def _tool_event(be) -> dict | None:
         "ts_ms": be.ts_ms,
         "status": "done",
     }
+    # §9.9 injection banner: a tool result that tripped the injection screen. Ride
+    # the existing `tool` frame as a FLAGGED chip carrying the source-card banner,
+    # so the FE surfaces "this source contains instruction-like text" with no new
+    # channel. `injection:<tool>` keys are written by the chat tool loop.
+    if isinstance(be.key, str) and be.key.startswith("injection:"):
+        val = be.value if isinstance(be.value, dict) else {}
+        payload["status"] = "flagged"
+        payload["banner"] = val.get("banner") or "This source contains " \
+            "instruction-like text — treated as data only."
+        payload["source"] = val.get("source") or be.key.split(":", 1)[-1]
+        return payload
+    # §9.8 freshness: a live verification search for a time-sensitive fact. Ride
+    # the `tool` frame as a `verifying` status carrying the calm notice, so the
+    # FE shows a "verifying current facts" chip while the answer streams.
+    if isinstance(be.key, str) and be.key.startswith("verifying:"):
+        val = be.value if isinstance(be.value, dict) else {}
+        payload["status"] = "verifying"
+        payload["note"] = val.get("note") or "Verifying current facts…"
+        return payload
     if be.key in _UI_FORWARDED_KEYS:
         data = _serialize_slot(be.value)
         if data is not None:

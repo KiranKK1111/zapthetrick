@@ -71,7 +71,13 @@ RUN python3 -m venv "$VENV" \
   && "$VENV/bin/pip" install --no-cache-dir -r /tmp/req.txt \
   # 8-bit quantization for the 7B VLM (GPU-only; kept out of requirements.txt so
   # the CPU/Windows desktop build isn't forced to install a CUDA wheel).
-  && "$VENV/bin/pip" install --no-cache-dir bitsandbytes
+  && "$VENV/bin/pip" install --no-cache-dir bitsandbytes \
+  # Local generation floor (§2.1 T4): llama.cpp OpenAI-compatible server, run
+  # on 127.0.0.1 when LOCAL_LLM_ENABLED=1 (opt-in). This installs the CPU build
+  # (always compiles); for GPU acceleration rebuild with
+  # CMAKE_ARGS="-DGGML_CUDA=on" on a CUDA *devel* base (nvcc). Baked so the
+  # opt-in works without a second image; the server only runs when enabled.
+  && "$VENV/bin/pip" install --no-cache-dir "llama-cpp-python[server]"
 
 # 6) Bake the app CODE into the image (self-contained — no git clone at boot,
 #    no REPO_URL). Copied LAST so a code change doesn't bust the deps layer.

@@ -148,6 +148,17 @@ class BaseAdapter:
             payload["seed"] = options["seed"]
         if options.get("response_format_json"):
             payload["response_format"] = {"type": "json_object"}
+        # Local grammar-constrained decoding (§8.7 floor): GBNF is a llama.cpp
+        # extension, so send it ONLY to the local provider — a cloud endpoint
+        # would 400 on the unknown field. This is what makes structured()'s last
+        # rung guaranteed-valid JSON.
+        if options.get("grammar") and self.platform == "local":
+            payload["grammar"] = options["grammar"]
+            # Belt-and-suspenders across llama.cpp server flavors: native
+            # `llama-server` honors `grammar` (the exact schema); llama-cpp-python's
+            # OpenAI server honors `response_format` json mode. Either yields
+            # parseable JSON for the §8.7 floor.
+            payload.setdefault("response_format", {"type": "json_object"})
         return payload
 
     @staticmethod

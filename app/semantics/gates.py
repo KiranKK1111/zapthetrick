@@ -305,6 +305,108 @@ GATES: dict[str, dict] = {
             "what is a hash map",
         ],
     },
+    # Stage-4 §3.5 — a follow-up that EDITS the code just produced (so it can be
+    # applied as a targeted str_replace patch + re-verified, not regenerated from
+    # scratch). Positives are incremental change asks against existing code;
+    # negatives are new requests, questions, and non-code edits.
+    "code_edit_request": {
+        "threshold": 0.60,
+        "positives": [
+            "now add error handling",
+            "also handle the empty list case",
+            "add a check for null input",
+            "make it handle negative numbers too",
+            "refactor this to use a loop instead of recursion",
+            "fix the off-by-one bug",
+            "add type hints to the function",
+            "rename the variable to count",
+            "add a docstring",
+            "use a set instead of a list here",
+            "add input validation",
+            "make the function async",
+            "handle the division by zero",
+            "add a base case for the empty string",
+            "optimize the inner loop",
+            "add logging to this",
+            "change it to return a tuple",
+            "wrap it in a try except",
+        ],
+        "negatives": [
+            "write a program to reverse a string",
+            "what does this code do",
+            "explain how this works",
+            "why does this happen",
+            "give me this as a table",
+            "summarize the above",
+            "create a rest api for users",
+            "what is a hash map",
+            "put this in a document",
+            "solve this leetcode problem",
+            "make it shorter",
+            "continue from where you left off",
+        ],
+    },
+    # Stage-5 §3.10 — a TRIVIAL turn: a greeting/ack/thanks/chitchat that can go
+    # around the mesh (no enrichment/tool pass) for a snappy fast-tier reply.
+    # Positives are social/filler; negatives are anything that needs real work
+    # (a question, a request, a follow-up edit — even short ones).
+    "trivial_turn": {
+        "threshold": 0.62,
+        "positives": [
+            "hi", "hello", "hey there", "good morning", "yo",
+            "thanks", "thank you", "thanks a lot", "much appreciated",
+            "ok", "okay", "cool", "got it", "sounds good", "perfect",
+            "nice", "great", "awesome", "lol", "haha", "np", "no worries",
+            "how are you", "what's up", "nice to meet you", "bye", "see you",
+        ],
+        "negatives": [
+            "what is a hash map",
+            "write a function to reverse a string",
+            "explain how kafka works",
+            "why does my code fail",
+            "add error handling to this",
+            "make me a resume",
+            "solve this leetcode problem",
+            "summarize the above",
+            "what's the difference between a list and a tuple",
+            "continue from where you left off",
+            "give me more detail on this",
+            "what should i learn next",
+        ],
+    },
+    # Stage-6 §4.12 — a question ABOUT the interviewing company/organization
+    # (its product, mission, stack, customers) → answerable from the OrgBrief.
+    "org_question": {
+        "threshold": 0.62,
+        "positives": [
+            "what does our company do",
+            "tell me what you know about us",
+            "what do you know about our product",
+            "why do you want to work here",
+            "what interests you about our company",
+            "how would you describe our business",
+            "what do you think our biggest challenge is",
+            "who do you think our customers are",
+            "what is our tech stack",
+            "what do you know about our mission",
+            "how does our platform work",
+            "what do we sell",
+            "describe our product to me",
+            "what's your understanding of what we build",
+        ],
+        "negatives": [
+            "tell me about yourself",
+            "what are your strengths",
+            "walk me through your resume",
+            "explain how kafka works",
+            "write a function to reverse a string",
+            "what did you do at your last job",
+            "how do you handle pressure",
+            "what is a hash map",
+            "describe a project you are proud of",
+            "why did you leave your previous role",
+        ],
+    },
 }
 
 # Cached (positives_matrix, negatives_matrix) per gate for the REAL embedder.

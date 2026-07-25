@@ -87,6 +87,13 @@ async def discover_models(platform: str, api_key: str | None = None) -> dict:
 
     Returns {discovered, added, error?}. Never raises for ordinary failures
     (no key, provider down) — callers treat it as best-effort.
+
+    Last-known-good invariant (§2.8): discovery is ADDITIVE-ONLY and every fetch
+    failure (transport error / non-200 / non-JSON) returns BEFORE the DB write
+    block below — so a provider's bad `/models` day can never delete or mutate
+    the existing catalog. The persisted rows + the static curated seed ARE the
+    last-known-good; the pool is never emptied by a failed fetch. Pinned by
+    tests/test_catalog_lkg.py.
     """
     spec = get_provider_spec(platform)
     if spec is None:
@@ -140,16 +147,27 @@ async def discover_models(platform: str, api_key: str | None = None) -> dict:
 
     from app.llm.catalog import detect_vision, rank_from_id
 
+    # Discovered models are added to the CURRENT user's catalog (§10.1c).
+    try:
+        from storage.context import get_request_user_id
+        uid = get_request_user_id()
+    except Exception:  # noqa: BLE001
+        uid = None
+
     added = 0
     async with factory() as session:
         existing = {
             m.model_id: m
             for m in (
-                await session.execute(select(LLMModel).where(LLMModel.platform == platform))
+                await session.execute(
+                    select(LLMModel).where(
+                        LLMModel.platform == platform, LLMModel.user_id == uid))
             ).scalars().all()
         }
         max_priority = (
-            await session.execute(select(func.max(LLMFallbackConfig.priority)))
+            await session.execute(
+                select(func.max(LLMFallbackConfig.priority))
+                .where(LLMFallbackConfig.user_id == uid))
         ).scalar() or 0
         for mid in ids:
             vision = detect_vision(mid, meta_by_id.get(mid))
@@ -166,6 +184,7 @@ async def discover_models(platform: str, api_key: str | None = None) -> dict:
                 continue
             intel, speed = rank_from_id(mid, meta_by_id.get(mid))
             model = LLMModel(
+                user_id=uid,
                 platform=platform, model_id=mid, display_name=mid,
                 intelligence_rank=intel, speed_rank=speed, enabled=False,
                 supports_vision=vision,
@@ -175,7 +194,8 @@ async def discover_models(platform: str, api_key: str | None = None) -> dict:
             await session.flush()  # assign id
             max_priority += 1
             session.add(
-                LLMFallbackConfig(model_db_id=model.id, priority=max_priority, enabled=False)
+                LLMFallbackConfig(user_id=uid, model_db_id=model.id,
+                                  priority=max_priority, enabled=False)
             )
             existing[mid] = model
             added += 1

@@ -326,17 +326,20 @@ async def list_conversations(
       q         full-text search across titles + messages
       limit     max rows (default 100)
     """
+    from app.api.auth import resolve_user_id
     from storage.repos import SessionRepo
 
     try:
+        uid = await resolve_user_id()  # scope the drawer to THIS user (§10.1c)
         repo = SessionRepo(session)
         if q:
-            rows = await repo.search(q, limit=limit)
+            rows = await repo.search(q, user_id=uid, limit=limit)
             if type is not None:
                 rows = [r for r in rows if r.type == type]
         else:
             rows = await repo.list(
                 type=type,
+                user_id=uid,
                 archived=archived,
                 tag=tag,
                 limit=limit,
@@ -434,6 +437,13 @@ async def get_conversation(
         convo = await session.get(Conversation, key)
         if convo is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        # Ownership: a conversation belongs to the user who created it (§10.1c).
+        # Legacy rows with no owner (user_id NULL) stay readable so pre-accounts
+        # history isn't orphaned.
+        from app.api.auth import resolve_user_id
+        _uid = await resolve_user_id()
+        if convo.user_id is not None and _uid is not None and convo.user_id != _uid:
+            raise HTTPException(status_code=404, detail="Conversation not found")
 
         # Pull the messages explicitly (don't rely on lazy-loading the
         # relationship — async sessions don't expire-load).
@@ -517,8 +527,10 @@ async def patch_conversation(
     session: AsyncSession = Depends(get_session),
 ):
     """Pin / archive / rename / retag one conversation in a single call."""
+    from app.api.auth import resolve_user_id
     from storage.repos import SessionRepo
 
+    uid = await resolve_user_id()
     repo = SessionRepo(session)
     row = await repo.set_flags(
         conversation_id,
@@ -526,6 +538,7 @@ async def patch_conversation(
         archived=body.archived,
         title=body.title,
         tags=body.tags,
+        user_id=uid,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -564,7 +577,9 @@ async def delete_conversation(
     except Exception:  # noqa: BLE001 — never block the delete on collection
         pass
 
-    ok = await SessionRepo(session).delete(conversation_id)
+    from app.api.auth import resolve_user_id
+    ok = await SessionRepo(session).delete(
+        conversation_id, user_id=await resolve_user_id())
     if not ok:
         raise HTTPException(status_code=404, detail="Conversation not found")
     # Drop the conversation's code knowledge graphs in the SAME transaction — a
@@ -598,8 +613,11 @@ async def cancel_conversation_stream(conversation_id: str):
     poll between steps — they then cancel the sandbox verify, close the LLM
     stream, save the partial, and end. Idempotent; safe to call when nothing is
     streaming."""
-    from app.api.replay import request_cancel
-    request_cancel(str(conversation_id))
+    # §4.5: cancel the whole turn scope — the cooperative flag fires (so
+    # step-polling generators stop) AND every registered lane (LLM stream,
+    # sandbox, verifier, repair loop) is actively torn down.
+    from app.api import cancel_scope
+    cancel_scope.cancel(str(conversation_id))
     return {"ok": True}
 
 
@@ -639,7 +657,9 @@ async def bulk_delete_conversations(
     except Exception:  # noqa: BLE001 — never block the delete on collection
         pass
 
-    deleted = await SessionRepo(session).delete_many(ids)
+    from app.api.auth import resolve_user_id
+    deleted = await SessionRepo(session).delete_many(
+        ids, user_id=await resolve_user_id())
     try:
         from sqlalchemy import bindparam as _bindparam
 

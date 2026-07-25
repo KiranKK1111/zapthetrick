@@ -121,6 +121,12 @@ class PersonaAgent(Agent):
         if build_directive:
             system_prompt += "\n\n" + build_directive
 
+        # §10 voice mode: a spoken conversation — short, plain-prose, no visual
+        # structure. Appended prominently so it governs the whole reply.
+        voice_directive = (extras.get("voice_directive") or "").strip()
+        if voice_directive:
+            system_prompt += "\n\n" + voice_directive
+
         # Explicit performance/complexity requirements ("within 500ms",
         # "worst-case O(n)", "constant space") — the solution must satisfy
         # them and state its complexity; never silently hand back the
@@ -136,6 +142,19 @@ class PersonaAgent(Agent):
             from ..chat.difficulty import rigor_directive
             system_prompt += rigor_directive(difficulty)
         except Exception:  # noqa: BLE001
+            pass
+
+        # §8.2 adaptive effort: when the effort dial gave this turn a thinking
+        # budget (hard/expert/thorough), ask the model to surface only brief
+        # "considering X vs Y…" step summaries — not raw chain-of-thought — so
+        # the extra reasoning shows up as calm progress steps, never a wall of
+        # scratchpad. Additive + fail-open; absent (dial off) → no change.
+        try:
+            _effort = extras.get("effort")
+            if isinstance(_effort, dict) and _effort.get("escalated"):
+                from ..llm.effort import thinking_summary_directive
+                system_prompt += "\n\n" + thinking_summary_directive()
+        except Exception:  # noqa: BLE001 — directive is additive, never fatal
             pass
 
         # HARD user constraints (deterministic): an explicit quantity ("at
@@ -337,6 +356,28 @@ class PersonaAgent(Agent):
                         if extras.get("understanding_embedding"):
                             _opts["query_embedding"] = extras.get(
                                 "understanding_embedding")
+                except Exception:  # noqa: BLE001
+                    pass
+                # §2.6 — declare the turn's task profile SEMANTICALLY (the
+                # exemplar gate is the authority; the Understanding category is
+                # the cold-start fallback). The router adds a measured verify-pass
+                # penalty per (model-identity, profile). Flag-gated + fail-open.
+                try:
+                    from ..core.config_loader import cfg as _cfgp
+                    if getattr(_cfgp.routing, "task_profiles", False):
+                        from app.llm import profiles as _profiles
+                        from app.semantics import gates as _gates
+                        _ptext = ""
+                        for _m in reversed(messages):
+                            if _m.get("role") == "user":
+                                _c = _m.get("content")
+                                _ptext = _c if isinstance(_c, str) else ""
+                                break
+                        _prof = _profiles.classify(
+                            _ptext, gate_classify=_gates.classify,
+                            fallback_category=extras.get("task_category"))
+                        if _prof:
+                            _opts["task_profile"] = _prof
                 except Exception:  # noqa: BLE001
                     pass
                 async for chunk in llm.stream_chat(

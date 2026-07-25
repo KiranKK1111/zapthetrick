@@ -157,10 +157,15 @@ class SessionRepo(Repo):
         archived: bool | None = None,
         title: str | None = None,
         tags: list[str] | None = None,
+        user_id: uuid.UUID | None = None,
     ) -> Session | None:
-        """Partial update — only the supplied fields are touched."""
+        """Partial update — only the supplied fields are touched. When `user_id`
+        is given, a session owned by someone else is treated as not-found, so a
+        user can only rename/pin/archive their OWN conversations (§10.1c)."""
         row = await self.get(session_id)
         if row is None:
+            return None
+        if user_id is not None and row.user_id != user_id:
             return None
         if pinned is not None:
             row.pinned = pinned
@@ -207,18 +212,26 @@ class SessionRepo(Repo):
             .values(resume_id=None)
         )
 
-    async def delete(self, session_id: uuid.UUID | str) -> bool:
+    async def delete(
+        self, session_id: uuid.UUID | str,
+        *, user_id: uuid.UUID | None = None,
+    ) -> bool:
         if isinstance(session_id, str):
             session_id = _to_uuid(session_id)
-        result = await self.session.execute(
-            delete(Session).where(Session.id == session_id)
-        )
+        stmt = delete(Session).where(Session.id == session_id)
+        if user_id is not None:  # only the owner may delete (§10.1c)
+            stmt = stmt.where(Session.user_id == user_id)
+        result = await self.session.execute(stmt)
         return (result.rowcount or 0) > 0
 
-    async def delete_many(self, session_ids: list) -> int:
+    async def delete_many(
+        self, session_ids: list,
+        *, user_id: uuid.UUID | None = None,
+    ) -> int:
         """Delete many sessions in ONE statement (children cascade at the DB
         level, same as `delete`). Returns the number of rows removed. Skips ids
-        that don't parse rather than failing the whole batch."""
+        that don't parse rather than failing the whole batch. When `user_id` is
+        given, only that user's sessions are removed."""
         ids = []
         for s in session_ids:
             try:
@@ -227,9 +240,10 @@ class SessionRepo(Repo):
                 continue
         if not ids:
             return 0
-        result = await self.session.execute(
-            delete(Session).where(Session.id.in_(ids))
-        )
+        stmt = delete(Session).where(Session.id.in_(ids))
+        if user_id is not None:
+            stmt = stmt.where(Session.user_id == user_id)
+        result = await self.session.execute(stmt)
         return result.rowcount or 0
 
 

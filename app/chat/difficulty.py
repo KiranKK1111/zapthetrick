@@ -149,8 +149,17 @@ async def classify_difficulty(text: str, recent: str = "") -> str:
     # classifier LLM call entirely so simple turns respond instantly. (Kept
     # tight: a 3-4 char acronym like "DFS"/"OOP?" is NOT trivial.)
     low = t.lower().strip(" \t\n!.?,;:")
-    if low in _TRIVIAL_PHRASES or len(low) <= 2:
-        return "trivial"
+    # §3.10 — trivial detection is SEMANTIC now (the `trivial_turn` exemplar gate
+    # is the authority; `_TRIVIAL_PHRASES` is only the cold-start fallback),
+    # replacing the old hardcoded-lexicon check so paraphrased greetings/acks are
+    # caught too. Fail-open to the phrase list.
+    try:
+        from app.chat.fast_lane import is_trivial as _is_trivial
+        if _is_trivial(low):
+            return "trivial"
+    except Exception:  # noqa: BLE001
+        if low in _TRIVIAL_PHRASES or len(low) <= 2:
+            return "trivial"
     # Fast path: an obviously HEAVY/large-scope task goes straight to the
     # strongest model — no need to ask the classifier.
     if _is_heavy(t):

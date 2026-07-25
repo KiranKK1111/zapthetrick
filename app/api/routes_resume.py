@@ -394,14 +394,26 @@ async def list_resumes(
     ]
 
 
+async def _owned_resume_or_404(session, resume_id):
+    """Fetch a resume and verify it belongs to the current user (§10.1c). Legacy
+    NULL-owned resumes stay accessible (pre-accounts data)."""
+    from app.api.auth import resolve_user_id
+    resume = await ResumeRepo(session).get(resume_id)
+    if resume is None:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    uid = await resolve_user_id()
+    if (resume.user_id is not None and uid is not None
+            and resume.user_id != uid):
+        raise HTTPException(status_code=404, detail="Resume not found")
+    return resume
+
+
 @router.get("/resume/{resume_id}", response_model=ResumeDetail)
 async def get_resume(
     resume_id: str,
     session: AsyncSession = Depends(get_session),
 ) -> ResumeDetail:
-    resume = await ResumeRepo(session).get(resume_id)
-    if resume is None:
-        raise HTTPException(status_code=404, detail="Resume not found")
+    resume = await _owned_resume_or_404(session, resume_id)
     return ResumeDetail(
         id=str(resume.id),
         display_name=resume.display_name,
@@ -449,9 +461,7 @@ async def delete_resume(
     row removal is what makes the resume disappear from the list and stop
     grounding answers."""
     repo = ResumeRepo(session)
-    resume = await repo.get(resume_id)
-    if resume is None:
-        raise HTTPException(status_code=404, detail="Resume not found")
+    resume = await _owned_resume_or_404(session, resume_id)
     file_path = resume.file_path
 
     _progress.begin(resume_id, op="delete")

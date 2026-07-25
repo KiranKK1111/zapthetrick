@@ -90,6 +90,11 @@ class LLMSection(BaseModel):
     # streaming in well under a second. The auto-router tries this model
     # first and falls back to the normal chain if it has no usable key.
     live_model: str | None = None
+    # Stage-7 §8.2 · adaptive reasoning effort dial: difficulty → ONE coherent
+    # effort profile {tier, thinking-token budget, best-of-N, judge, route-to-
+    # reasoning}. A repair loop escalates to the reasoning tier; the Fast/Thorough
+    # reasoning mode shifts the band. Default OFF → today's per-knob behaviour.
+    effort_dial: bool = False
     # Live Listen latency guards. Interview answers must be FAST and focused,
     # not 10k-token essays — and a stalled/rate-limited free model must never
     # hang the turn at "Thinking". `live_max_tokens` caps the answer length;
@@ -450,6 +455,66 @@ class CodeSolverSection(BaseModel):
     # Two-step image solve: OCR with vision model, then reason with code model.
     two_step_solve: bool = True
     ocr_max_tokens: int = 1500
+    # Stage-4 §3.2 · structured Solve extraction: replace the free-text delimited
+    # OCR with a JSON-schema contract (platform/title/statement/constraints/
+    # examples/selected_language/starter_code/ui_confidence) validated via §8.7,
+    # driving a deterministic language ladder + a problem-fingerprint cache.
+    # Default OFF → today's delimited OCR path, byte-identical. Fail-open.
+    structured_extraction: bool = False
+    # Language ladder: trust the editor's selected-language chip at/above this.
+    selected_language_min_conf: float = 0.7
+    # Stage-4 §3.2 · problem-fingerprint solution cache: an already-solved
+    # problem (same normalized statement + language) is re-served instantly with
+    # a fresh beautify pass instead of re-reasoning. Per-user scoped, bounded
+    # LRU, revalidate-before-serve. Default OFF → today's always-solve path.
+    fingerprint_cache: bool = False
+    # Stage-4 §3.5 · toolchain prefetch: the moment a code answer's language is
+    # known (Solve's language slot, or the first fence tag while a chat answer
+    # streams), page in that runtime OFF the request path so the verifier starts
+    # hot. Best-effort + idempotent; a no-op win on the docker backend (container
+    # already warm), a real win on local/bwrap. Default OFF.
+    toolchain_prefetch: bool = False
+    # Stage-4 §3.5 patch-based follow-up edits: a follow-up that EDITS the code
+    # just produced emits str_replace patches (re-verify only the changed file)
+    # instead of regenerating; a failed patch falls back to full regen. Default
+    # OFF → today's full regeneration.
+    patch_edits: bool = False
+    # Stage-4 §3.1 · verify-while-streaming for PLAIN chat code answers (not just
+    # image/Solve): after the draft streams, sandbox-compile+run the code the
+    # user is already reading and attach an honest verdict — hot-swapping a
+    # repaired block on failure (≤ verify_chat_max_repairs). Runs concurrently
+    # with reading (Chat reveals the draft first; only Live gates before reveal).
+    # Default OFF → today's un-verified chat code, byte-identical.
+    verify_chat_code: bool = False
+    verify_chat_max_repairs: int = 2
+    verify_chat_deadline_s: float = 180.0
+
+
+class ChatSection(BaseModel):
+    """Stage-5 §3.10 perceived-latency levers for the Chat turn."""
+    # Trivial-turn fast lane: a greeting/ack/chitchat skips the mesh's
+    # enrichment (understanding pass, tool selection) for a snappy fast-tier
+    # reply. The trivial decision is SEMANTIC (the `trivial_turn` gate);
+    # difficulty already routes trivial turns to a fast model, so this only
+    # skips work they don't need. Default OFF → full mesh every turn.
+    fast_lane: bool = False
+    # Input-time warmup: while the user types, pre-warm routing/prompt assembly
+    # so Enter fires into a hot path. Default OFF.
+    input_warmup: bool = False
+    # Stage-7 §3.13 · interpretation layer: canonicalize the turn (typo/shorthand/
+    # anaphora) → ONE typed structured brief {goal, deliverable_class,
+    # constraints, tone, referents, missing_slots, contradictions} every
+    # downstream decision reads, so a vague prompt is understood ONCE rather than
+    # re-guessed per stage. Default OFF → today's per-stage understanding. The
+    # brief is additive envelope context + fail-open.
+    interpretation: bool = False
+    # Stage-7 §3.9 · repeat-prompt variation engine: an IMMEDIATE same-conversation
+    # repeat of a prompt is a VARIATION request, never a cache hit — the engine
+    # bypasses the cache, records each approach in a per-fingerprint ledger, and
+    # feeds a divergence directive (+ widened sampling + model rotation) so each
+    # sibling is genuinely different, tagged with its approach. Default OFF →
+    # today's cache-serve on a repeat. Fail-open.
+    variation_engine: bool = False
 
 
 class WebSearchSection(BaseModel):
@@ -601,6 +666,14 @@ class AgentsSection(BaseModel):
     enabled: AgentsEnabled = Field(default_factory=AgentsEnabled)
     priorities: AgentsPriorities = Field(default_factory=AgentsPriorities)
     deadlines_ms: AgentsDeadlines = Field(default_factory=AgentsDeadlines)
+    # Stage-11 §8.6 · deep research / subagent isolation: a planner fans a
+    # research question out to 2–4 ISOLATED workers (fresh context, a large
+    # private budget, a distilled ≤1k-token result + citations) → a synthesizer
+    # (reasoning tier, ONE follow-up wave max). Default OFF → today's single-agent
+    # answer.
+    deep_research: bool = False
+    deep_research_max_workers: int = 4
+    deep_research_result_cap: int = 1000     # tokens per distilled worker result
 
 
 class AdvancedRagSection(BaseModel):
@@ -624,6 +697,13 @@ class AdvancedRagSection(BaseModel):
     kg_suggestions: bool = False
     small_to_big_retrieval: bool = True
     top_k_retrieve: int = 30
+    # Stage-7 §8.3 · span citations: after retrieval+rerank, ground each answer
+    # claim to its supporting source — a `{claim_span, doc, chunk, quote_span}`
+    # into `envelope.grounding.citations`, so the FE renders tappable ¹²³ marks →
+    # a source card with the exact quote highlighted. Deterministic span
+    # alignment (no model). Default OFF → today's un-cited answers. Fail-open.
+    span_citations: bool = False
+    span_citation_min_score: float = 0.4   # min claim↔quote overlap to cite
     top_k_rerank: int = 10
     top_k_final: int = 5
     compression_target_ratio: float = 0.4
@@ -695,6 +775,21 @@ class AdvancedRagSection(BaseModel):
     cognitive_cache_ttl_s: int = 3600
     cognitive_cache_max: int = 512
     cognitive_cache_temp_ceiling: float = 0.5
+    # Stage-4 §3.6 semantic answer cache v2 (default OFF → today's exact-only,
+    # process-wide cache, byte-identical). When on, the cache key is scoped
+    # PER-USER (§10.2) + by a context fingerprint (attached files / active
+    # artifact / memory epoch), and a VOLATILE cue-list bypasses caching a
+    # time-sensitive answer (freshness §9.8 replaces the cue-list later).
+    semantic_cache: bool = False
+    # Shorter TTL for prompts with a mild recency cue (SLOW class) vs STABLE.
+    semantic_cache_slow_ttl_s: int = 600
+    # The near (embedding) tier: on an exact miss, embed the normalized prompt
+    # and serve a stored answer whose prompt is ≥ threshold cosine-similar within
+    # the SAME user+context fingerprint — labeled "from a moment ago". Embeds in
+    # a worker thread, only when the per-scope index is non-empty. Default OFF.
+    semantic_cache_near: bool = False
+    semantic_cache_near_threshold: float = 0.97
+    semantic_cache_near_max: int = 64      # bounded per-scope embedding index
     prefer_recent_model: bool = True
     # P2-11 — self-improvement on hard turns (free-only quality squeeze):
     #   self_improve — on an EXPERT agent turn, generate N candidate first
@@ -795,6 +890,14 @@ class MemorySection(BaseModel):
     # §18 data lifecycle: purge episodes/skills older than this many days when a
     # retention sweep runs (0 = keep indefinitely — nothing is deleted silently).
     retention_days: int = 0
+    # Stage-7 §8.4 · auto-compaction: when the live window fills past
+    # `compaction_window_ratio` (default 70%), fold the aged turns into a typed
+    # STRUCTURED digest (decisions/facts/entities/open-threads/goals/artifacts —
+    # the "L4" representation) instead of today's flat-prose rolling summary. The
+    # digest is searchable (Component D's conversation_search) and durable.
+    # Default OFF → today's `app/chat/history.py` prose summary is untouched.
+    auto_compaction: bool = False
+    compaction_window_ratio: float = 0.70
 
 
 class LearningSection(BaseModel):
@@ -843,6 +946,17 @@ class ResponseArchSection(BaseModel):
     """Architecture.md §"Response architecture"."""
     enabled: bool = True
     default_depth: str = "standard"   # tldr | standard | deeper | exhaustive
+    # Stage-8 §5.4 · mermaid backend render lane: lint+normalize a mermaid source
+    # (wrap long labels, ensure direction, quote specials, cap size) → mmdc→SVG
+    # (rendered on-pod, cached by source hash) → one fast-tier repair on error →
+    # envelope {mermaid_source, svg_artifact_id}, so a diagram never trims to an
+    # unmeasured client viewport. Default OFF → today's raw ```mermaid fence
+    # rendered client-side.
+    mermaid_lane: bool = False
+    # Max nodes/lines a normalized diagram may carry before it's capped (a giant
+    # auto-generated graph renders unreadably; better to cap + warn).
+    mermaid_max_nodes: int = 60
+    mermaid_label_wrap: int = 24      # wrap labels longer than this many chars
 
 
 class ContinuitySection(BaseModel):
@@ -875,6 +989,20 @@ class ToolLoopSection(BaseModel):
     # Default chat tool set when the intent profile doesn't constrain tools.
     tools: list[str] = Field(default_factory=lambda: [
         "code_solver", "web_search", "code_search", "resume_lookup"])
+    # Stage-7 §8.4 · conversation_search: expose a tool the loop can call to
+    # retrieve from EARLIER in the thread (past turns + compaction digests) via
+    # hybrid dense+BM25 + rerank, returning CITED snippets. Off → the tool is
+    # hidden; a long thread relies only on the recent window + rolling summary.
+    conversation_search: bool = False
+    # Stage-9 §9.2 · interleaved (mid-generation) tool use: the model may emit a
+    # tool_use block DURING generation → pause the stream → §9.9 capability guard
+    # → execute → splice the framed result on the cached prefix → resume. Budgets
+    # bound it: `interleaved_interactive_budget` calls in a chat turn,
+    # `interleaved_task_budget` in a background agent-task. Default OFF → today's
+    # pre-answer-only `run_tool_loop`.
+    interleaved: bool = False
+    interleaved_interactive_budget: int = 3
+    interleaved_task_budget: int = 15
 
 
 class CalibrationSection(BaseModel):
@@ -895,6 +1023,21 @@ class PrivacySection(BaseModel):
       strict  — also emails / phones / IPs (may reduce utility; opt-in).
     Deterministic + always-on (a safety property), fail-open."""
     redact_egress: str = "secrets"
+
+
+class SecuritySection(BaseModel):
+    """§9.9 prompt-injection quarantine. Every untrusted ingestion point (web,
+    documents, OCR/screen, interview transcript, MCP results) is wrapped in a
+    uniform quarantine block (fenced DATA + provenance tag + standing contract),
+    and the turn is TAINTED. A tainted turn's CAPABILITY DROPS: side-effectful
+    tools (write/push/egress/config/task-create) require human approval; read-
+    only tools stay. A cheap injection screen raises a source-card banner.
+    Default OFF → today's `frame_untrusted` banner with no capability gate."""
+    quarantine: bool = False
+    # When True, a tainted turn drops side-effect capability even if the cheap
+    # injection screen found nothing (defense-in-depth). When False, only a
+    # SUSPICIOUS taint (screen tripped) drops capability.
+    strict_taint: bool = True
 
 
 class SynthesisSection(BaseModel):
@@ -929,6 +1072,99 @@ class UnderstandingSection(BaseModel):
     # Feed the Understanding's task_category + capabilities into the model router
     # (the "traffic controller"), and enable learned per-category success.
     route_from_understanding: bool = False
+
+
+class DistillationSection(BaseModel):
+    """§9.7 distillation runtime. Nightly SetFit/LoRA heads on the resident bge-m3
+    are promoted (only when they beat the baseline — 'never worse') to serve a
+    decision in ~5 ms in FRONT of the old heuristic/remote path; targets in order
+    SKIP/ANSWER → intent → difficulty → freshness → gates. Versioned weights are
+    logged per decision. Default OFF → today's heuristic/remote path only."""
+    enabled: bool = False
+    # A distilled head serves only when at least this confident; else fall
+    # through to the old path (so a hesitant head is never worse).
+    min_confidence: float = 0.70
+
+
+class EvalSection(BaseModel):
+    """§8.9 eval flywheel + canary. `flywheel` captures live failure signals
+    (thumbs-down, forced-answer-after-wrong-SKIP, verify-fail, schema-retry,
+    clarifier-other) as PII-redacted replayable cases → a golden set replayed
+    nightly for regressions. `canary` gates a prompt/gate/route change to a small
+    fraction of traffic and auto-promotes/rolls-back on the metric delta. Both
+    default OFF → no capture, no canary (today's static baseline)."""
+    flywheel: bool = False
+    canary: bool = False
+    canary_fraction: float = 0.10
+    canary_min_samples: int = 50
+    canary_margin: float = 0.02
+
+
+class VoiceSection(BaseModel):
+    """Stage-10 voice & ambient. Spoken responses (`tts`), wake-word conversation
+    loop (`loop`/`wake_word`), semantic+prosodic turn-taking (`conversational_intel`),
+    the first-class emotion engine (`emotion` + `emotion_mode` local|cloud), and
+    multilingual voice + code-switching (`multilingual`). All default OFF → today's
+    text-only, no-voice behaviour. The heavy engines (Kokoro TTS, SER head, wake
+    ECAPA) live on the GPU plane; these flags gate the LOGIC seams around them."""
+    tts: bool = False
+    # Which neural TTS engine voices the answer: "edge" = Edge Neural (free,
+    # key-less; the local/dev default), "kokoro" = the on-GPU-pod engine (falls
+    # back to edge when the pod engine isn't registered). §10.5.
+    tts_engine: str = "edge"          # edge | kokoro
+    loop: bool = False
+    wake_word: bool = False
+    conversational_intel: bool = False
+    emotion: bool = False
+    emotion_mode: str = "local"       # local | cloud (consent-gated §9.9/§E.1)
+    multilingual: bool = False
+
+
+class DeploySection(BaseModel):
+    """§6.4 zero-downtime drain. On restart: stop accepting new turns, let
+    in-flight ones finish (≤ `drain_deadline_s`), then restart and wait for
+    /readyz. Default OFF → today's hard restart."""
+    drain: bool = False
+    drain_deadline_s: float = 30.0
+
+
+class OpsSection(BaseModel):
+    """§11.3 data lifecycle + §11.4 pod resilience. `gc` runs the ref-counted
+    blob GC (nightly idle) under retention-as-data policies; `export` enables the
+    encrypted export/import; `redirector` enables the stable-redirector +
+    auto-resurrection path (pod death → recreate from template → /readyz →
+    redirector update). All default OFF → today's manual ops."""
+    gc: bool = False
+    export: bool = False
+    redirector: bool = False
+    # Consecutive failed health probes before auto-resurrection triggers.
+    resurrect_after_failures: int = 3
+
+
+class TasksSection(BaseModel):
+    """§9.3 background tasks & automations. Postgres-durable tasks (spec +
+    schedule + state + checkpoint + artifacts) run by an in-process asyncio
+    runner (N=`max_concurrency`); a cron ticker fires scheduled tasks;
+    side-effectful steps PARK on `needs_input` (human approval); a pod restart
+    rehydrates from the last checkpoint. Default OFF → no background-task
+    surface (today's synchronous turns only)."""
+    enabled: bool = False
+    max_concurrency: int = 2
+
+
+class FreshnessSection(BaseModel):
+    """§9.8 freshness layer. Classify how time-sensitive a question's answer is —
+    STABLE (definitions/maths/history — never goes stale), SLOW (framework
+    versions/best-practices — months), VOLATILE (prices/news/scores/"latest" —
+    hours) — and shade the interleaved tool loop: STABLE answers directly, SLOW
+    answers then runs ONE verification search, VOLATILE searches first and cites.
+    Live: VOLATILE = a knowledge answer + a "verifying" chip + a correction
+    footnote. Semantic-first (exemplar embeddings) with a cue-list fallback; the
+    distilled §9.7 head replaces the LLM judge later. Default OFF → today's
+    always-direct answer (no freshness shading)."""
+    classifier: bool = False
+    # Confidence floor for the semantic classifier; below it → cue fallback.
+    threshold: float = 0.55
 
 
 class IntentProfilesSection(BaseModel):
@@ -972,6 +1208,14 @@ class ResilienceSection(BaseModel):
     max_continuations: int = 2
     # Characters buffered at a continuation seam before de-duping the join.
     seam_buffer_chars: int = 200
+    # §3.4 provider pre-connect: keep warm HTTP/2 pools to the top-N candidate
+    # providers the router favors right now, so a turn (and its hedge) fires on
+    # an already-open connection instead of paying DNS+TCP+TLS (~100-300 ms).
+    # Fire-and-forget + debounced background warm; default OFF → today's lazy
+    # connect (a pool hiccup can never affect a turn).
+    pre_connect: bool = False
+    pre_connect_top_n: int = 3
+    pre_connect_min_interval_s: float = 30.0
     # Transient "no route" recovery: when a concurrent burst momentarily rate-
     # limits every model, `route_request` raises NoRouteAvailable. Instead of
     # erroring straight to the UI, the engine backs off (letting the 60s RPM/TPM
@@ -1015,6 +1259,30 @@ class DocumentsSection(BaseModel):
     # this is True its `document:true` is not trusted on its own. Set False to
     # restore the looser LLM-or-explicit behavior.
     explicit_only: bool = True
+    # Stage-4 §3.8 deliverable decision engine: when a borderline turn produces
+    # artifact-by-nature content (a resume, cover letter, blog post…) WITHOUT an
+    # explicit file/format ask, keep the answer inline but surface a one-tap
+    # "📄 Get this as a <fmt>" offer-chip; and when a prompt names MULTIPLE
+    # deliverables, surface a multi-select picker. Default OFF → today's strict
+    # explicit-only behaviour (no offer, no picker), byte-identical.
+    deliverable_engine: bool = False
+    # Stage-4 §3.3 visual-QA loop: after a document renders + passes its
+    # structural check, rasterize its pages and have the resident VLM critique
+    # them against the requirement rubric (page count, missing sections, overflow)
+    # — the report ships in the delivery note. Default OFF → today's structural-
+    # only validation, byte-identical. Fail-open (a QA hiccup never blocks).
+    visual_qa: bool = False
+    # Stage-4 §3.3 · Typst-backed PDF rendering: compile Markdown → PDF with the
+    # baked `typst` binary (far better typography than fpdf2). Default OFF, and a
+    # no-op unless the binary is present — a missing binary / compile error falls
+    # back to the existing fpdf2/weasyprint renderer, so output never regresses.
+    typst: bool = False
+    typst_bin: str = ""  # optional explicit path; else the binary is found on PATH
+    # Stage-4 §3.3 visual-QA REPAIR: how many rewrite→re-render→re-check rounds
+    # a HIGH-severity visual defect triggers. 0 = advisory only (report the
+    # findings, ship as-is). >0 rewrites the source to fix the findings and keeps
+    # the fewest-issues render. Fail-open + only accepts a strict improvement.
+    visual_qa_repair_rounds: int = 0
     # Phase 1b — the export job manager's worker pool + per-render timeout.
     export_concurrency: int = 2
     export_timeout_s: float = 120.0
@@ -1064,6 +1332,33 @@ class DocumentsSection(BaseModel):
     # least this fraction of the source's significant words, else it's flagged as
     # "dropped content". Only enforced when the source has ≥25 such words.
     verify_coverage_min: float = 0.6
+    # Stage-8 §8.8 · diff-edits: edit a generated artifact with targeted
+    # `str_replace` patches (schema-enforced) applied ATOMICALLY as a new version
+    # over the artifact store, instead of regenerating the whole document. A
+    # non-matching patch is rejected without mutating the artifact. Default OFF →
+    # today's regenerate-whole behaviour.
+    diff_edits: bool = False
+    # Stage-8 §8.8 · universal preview panel: a per-format preview matrix — pdf
+    # native · docx/pptx→LibreOffice→pdf→pages · xlsx/csv→typed JSON per sheet ·
+    # html/svg→sandboxed CSP · zip/7z→member tree · txt/md/code→text. Page-1
+    # served before the full verify; cached per (artifact, version). Default OFF →
+    # today's download-only artifact.
+    preview_panel: bool = False
+    # Stage-8 §3.11 · design system engine: theme tokens (6 color roles / 2 font
+    # roles / spacing) × font pairings × layout variants, LLM-PROPOSED but every
+    # combination WCAG-contrast-CHECKED (and auto-corrected to safe) so the whole
+    # several-lakh design space stays accessible. Default OFF → today's fixed
+    # template styling.
+    design_system: bool = False
+    # WCAG level the contrast guardrail enforces on text pairs: "AA" (4.5) or
+    # "AAA" (7.0). Large/heading text uses the level's large-text threshold.
+    design_wcag_level: str = "AA"
+    # Stage-8 §3.12 · session exports: turn a whole conversation into a
+    # `session-export` document — cover + hyperlinked TOC (chat: topic segments;
+    # live: per-question) + typographic body (code, mermaid, tables, footnote
+    # citations); a live export is a report (exec summary + per-question). Scope
+    # + theme controls; md + docx emit. Default OFF → no session-export path.
+    session_export: bool = False
 
 
 class RoutingSection(BaseModel):
@@ -1127,6 +1422,31 @@ class RoutingSection(BaseModel):
     # A turn slower than this (seconds, p50) is treated as fully "slow" for the
     # latency term; faster is proportionally rewarded.
     latency_baseline_s: float = 8.0
+    # Stage-5 §2.4 canonical model identity: normalize every (provider, model_id)
+    # to a provider-independent (family, size, version, quant) identity so the
+    # same weights on Groq/Cerebras/NIM/OpenRouter/HF are ONE model — the basis
+    # for two-stage selection + same-model failover + quota spread. Default OFF →
+    # identity is the raw (platform, model_id), today's behaviour.
+    canonical_identity: bool = False
+    # Stage-5 §2.6 task-profile scoring: a turn declares a task profile
+    # (chat_code/dsa_reasoning/extraction_json/doc_script/…), and the router adds
+    # a MEASURED verify-pass-rate penalty per (model-identity, profile) from the
+    # sandbox's own ground truth — so the coder/json ranking is measured, not
+    # declared. Additive (`profile_verify_weight` 0 → today's ranking); floors
+    # relax to penalties so the never-empty invariant holds. Default OFF.
+    task_profiles: bool = False
+    profile_verify_weight: float = 0.0
+    # Stage-5 §2.6 TTFT/TPS matrix: when on (AND task_profiles on AND a profile is
+    # declared), the profile's TTFT/TPS emphasis MODULATES the score — a
+    # first-token-sensitive profile (live_answer/speculation_draft) up-weights
+    # speed/latency, a reasoning profile (dsa_reasoning) down-weights them so a
+    # smarter-but-slower model wins. Scales are normalized so a "high"-emphasis
+    # profile is neutral (1.0). Default OFF → today's difficulty-only weighting.
+    profile_weight_matrix: bool = False
+    # Latency term the matrix ENABLES for a high-TTFT profile even when the global
+    # latency_aware flag is off (a live/spec-draft turn is all about first-token
+    # speed). 0 → the matrix only scales speed_rank (no observed-latency term).
+    profile_latency_weight: float = 0.15
     # Circuit breaker: after `circuit_fail_threshold` CONSECUTIVE hard failures
     # (provider errors / timeouts — NOT rate-limit 429s, which have their own
     # cooldown) a model is SKIPPED for `circuit_cooldown_s`, then half-opened so
@@ -1160,6 +1480,47 @@ class RoutingSection(BaseModel):
     quota_weight: float = 12.0
     quota_exhausted_penalty: float = 250.0
     quota_skip_exhausted: bool = True
+    # Stage-5 §2.7 · PROACTIVE quota PLANNING (the planned half of quota mgmt,
+    # `app/llm/quota_plan.py`). Distinct from the reactive `quota_aware` above:
+    #   quota_planning        → maintain per-(provider, key_id) DAILY ledgers
+    #     (seeded from known free-tier limits, corrected by provider rate-limit
+    #     headers), and fold their reserve-adjusted headroom into routing.
+    #   spread                → rank a canonical model's providers/keys best-first
+    #     by remaining headroom so routine traffic rotates and all quotas stay
+    #     alive through the day (needs canonical_identity for the model grouping).
+    #   live_reserve          → hold `live_reserve_fraction` of each key's daily
+    #     quota for Live; a non-Live turn sees headroom MINUS the reserve, a Live
+    #     turn sees it all. Released in the final hours before reset.
+    # All default OFF → today's reactive-only behaviour, byte-identical.
+    quota_planning: bool = False
+    spread: bool = False
+    live_reserve: bool = False
+    live_reserve_fraction: float = 0.30
+    # Weight of the §2.7 spread term in Stage-2 provider ordering (how hard a
+    # draining key is rotated away from). 0 → spread flag has no ranking effect.
+    spread_weight: float = 8.0
+    # Stage-5 §2.4 · TWO-STAGE selection (MODEL→PROVIDER) + same-model failover.
+    # When on, the router try-order groups candidates by canonical identity (needs
+    # `canonical_identity` for real grouping): pick the best MODEL on provider-
+    # independent quality, then the best PROVIDER for it, and exhaust that model's
+    # OTHER providers before a different model. Default OFF → today's single-stage
+    # pick, byte-identical. The outer never-empty ladder (T0–T5) is untouched.
+    two_stage: bool = False
+    # Stage-5 §2.5 · onboarding GAUNTLET: a newly-discovered (CanonicalId,
+    # provider) pair is QUARANTINED — not selectable above the wide-fallback rung
+    # (T3) — until a probe battery scores it, so an unproven model can't outrank a
+    # known-good one (the ladder can still reach it in extremis). The battery's
+    # results are the initial §2.6 scorecard. Default OFF → discovery = eligible,
+    # today's behaviour. Never-empty preserved (quarantine falls back to the full
+    # pool if it would empty the candidate set).
+    gauntlet: bool = False
+    # Stage-5 §2.7 F · LIVE SESSION model plan: at session start pin a primary +
+    # hot standby (both gauntlet-healthy), reserve the session's expected spend
+    # against their per-key ledgers, and hand off to the standby on the primary's
+    # first failure with ZERO ladder re-evaluation (voice/style consistency).
+    # Default OFF → Live routes through the ordinary ladder every turn. Full Live
+    # pre-flight wiring lands with Stage 6; the plan module is built here.
+    live_plan: bool = False
 
 
 class PerceivedSection(BaseModel):
@@ -1484,6 +1845,135 @@ class LiveSection(BaseModel):
     # Max sandbox-driven code regenerations on a failed run (0 = badge only).
     code_max_fix: int = 1
 
+    # Stage-6 §4.6 · Live PRE-FLIGHT board: a ~10 s session-start systems board
+    # (backend/audio/STT/LLM-ping/model-plan/GPU/context) that REFUSES a broken
+    # session with a fix hint, and seeds the §4.7 audio watchdog. Default OFF →
+    # today's immediate start (no board). Fail-open: the board only refuses on an
+    # explicit BLOCKING check failure, never on a board bug.
+    preflight: bool = False
+    # Stage-6 §4.7 · audio reliability. `audio_watchdog` runs the interviewer-
+    # SILENCE watchdog (interviewer quiet > `silence_watchdog_s` while the session
+    # is active → a "silence" chip) + the drift-proof transport sequence tracker
+    # (PCM gap/reorder/duplicate + jitter). `stt_failover` lets a GPU-degraded STT
+    # path auto-fail-over to the cloud engine (recovery only between sessions).
+    # Both default OFF → today's Live audio path. Advisory + fail-open.
+    audio_watchdog: bool = False
+    silence_watchdog_s: float = 30.0
+    stt_failover: bool = False
+    # Stage-6 §4.10 · voice contract + reasoning-leak guard. `voice_contract` runs
+    # the Layer-3 voice validator (first-person, spoken register, no markdown
+    # scaffolding, band shape) and tracks a per-model "dictatability" EWMA.
+    # `leak_guard` runs the Layer-2 streaming leakage detector — meta-discourse /
+    # internal-reasoning in the answer HEAD → hold + regenerate (model rotated).
+    # Both default OFF → today's Live answer path. Advisory + fail-open.
+    voice_contract: bool = False
+    leak_guard: bool = False
+    # Stage-6 §4.4 · live coding TWO-LANE gate: the PROSE lane (approach /
+    # complexity / edge cases) streams immediately while the CODE lane is held
+    # server-side until it compiles+runs in the sandbox, then revealed with an
+    # honest badge; a static Big-O cross-check rides along as an advisory note.
+    # Default OFF → today's single-lane code answer (the sandbox verify still runs
+    # under `code_sandbox`). Advisory + fail-open.
+    two_lane: bool = False
+    # Stage-6 §4.1 · STT streaming pair: Parakeet TDT PARTIALS (<400 ms) for the
+    # live caption + a Whisper large-v3-turbo FINALIZER re-scoring the endpointed
+    # utterance (authoritative), with the domain vocabulary (resume skills + role
+    # + JD terms from `app/live/domain.py`) fed into the engine's keyword-boost.
+    # Default OFF → today's single/dual-engine STT. Advisory + fail-open.
+    stt_pair: bool = False
+    # Stage-6 §4.2 · speculation v2 (the common case): fire the answer speculatively
+    # from the FIRST partial the completeness gate scores plausible (fast tier),
+    # FLUSH it when the endpointed final matches that partial ≥
+    # `speculation_endpoint_threshold` (~0 TTFT), else hedge a fresh answer within
+    # `hedge_budget_ms`; per-stage enrichment deadlines (`enrichment_budget_ms`)
+    # keep the critical path tight, slower stages defer to the next turn. Default
+    # OFF → today's answer-after-endpoint path. Advisory + fail-open.
+    speculation_v2: bool = False
+    speculation_endpoint_threshold: float = 0.92
+    enrichment_budget_ms: float = 120.0
+    hedge_budget_ms: float = 700.0
+    # Stage-6 §4.11 · domain transcript repair v2: the conservative phonetic /
+    # edit-distance repair (`repair.py`) augmented with an IT/CS lexicon + resume/
+    # JD/org terms and a per-session CORRECTION MEMORY — a fix applied once
+    # ("cube control" → "kubectl") is reapplied instantly + consistently for the
+    # rest of the session. Default OFF → today's `repair.repair` path. Fail-open;
+    # substitution-only (never introduces a term not phonetically implied).
+    repair_v2: bool = False
+    # Stage-7 §4.8 · Live canonicalization + said-state. `canonicalize` runs the
+    # fast-tier canonicalizer (strip disfluencies, resolve anaphora, SPLIT a
+    # multi-question utterance into ordered parts) so all downstream consumes one
+    # canonical form and both parts get answered in order. `said_state` maintains
+    # a per-session CLAIMS ledger ("build, don't re-introduce") that hard-feeds
+    # the consistency stage. Both default OFF → today's single-form path.
+    canonicalize: bool = False
+    said_state: bool = False
+    # Stage-7 §4.13 · technical answer system: role LENS (backend/frontend/SRE/
+    # data/ML/security/…) shapes the answer angle; a DEPTH LADDER L1–L4 progresses
+    # on drill-downs (never restarts); an out-of-envelope claim (beyond the resume
+    # Career Graph) is HONEST-FRAMED not fabricated; an unknown question gets a
+    # first-principles strategy. Default OFF → today's generic answer shaping.
+    answer_system: bool = False
+    # Stage-7 §4.14 · delivery tracking + true said-state: the displayed answer is
+    # a SCRIPT; what the candidate actually SPOKE is the truth. Fuzzy-align
+    # spoken→displayed → a delivery cursor (how far they read) + improvised
+    # additions; the said-state = the DELIVERED portion (an interrupted answer's
+    # unspoken tail is NOT "said"; an improvised claim IS). Default OFF → today's
+    # displayed-is-said assumption.
+    delivery_tracking: bool = False
+    # Stage-7 §4.15 · situational intelligence + two-lane display: classify the
+    # interviewer situation (stress/harshness/conviction-trap/salary/rapport)
+    # semantically → a per-situation × band strategy that shades the DICTATABLE
+    # answer, plus GUIDANCE whisper chips (amber, never read aloud); a validator
+    # enforces the dictatable/guidance separation so a coaching chip can never
+    # leak into what the candidate reads out. Default OFF → no situation shading.
+    situational: bool = False
+    # Stage-7 §4.16 · panel diarization: cluster foreign (interviewer) voice
+    # embeddings (ECAPA-class, computed on-pod from audio) into distinct speaker
+    # slots P1/P2/P3 → per-speaker role + situation + attribution through the
+    # said-state/ladder/dedup. Fail-soft: no embedding / clustering unavailable →
+    # today's single-interviewer behaviour. Default OFF.
+    panel_diarization: bool = False
+    # Stage-10 §9.5 · predictive pre-answering: during a silence ≥
+    # `pre_answer_silence_ms` with an idle GPU, pre-generate the top-2 predicted
+    # questions in full (cached prefix) and flush instantly when the real question
+    # matches (≥ `pre_answer_match_threshold` cosine). Stale on a context-dep
+    # change. Default OFF → today's answer-on-arrival.
+    pre_answering: bool = False
+    pre_answer_silence_ms: float = 4000.0
+    pre_answer_match_threshold: float = 0.92
+    # Stage-10 §9.4 · continuous screen context: a ~1 fps client luma-diff gate →
+    # JPEG → resident VLM → rolling ScreenState. Frames go ONLY to the local VLM.
+    # Default OFF → no ambient screen capture.
+    screen_context: bool = False
+    # Stage-11 §9.6 · coach mode: flip roles and run a practice interview — a
+    # question arc → ask → listen → score vs the band-contract rubric → follow-up
+    # → debrief. Default OFF → no coach surface.
+    coach_mode: bool = False
+    # Stage-11 §4.17 · assisted-session debrief: auto-generate a post-session
+    # report (delivery map + true claims ledger + situation replay + next-round
+    # follow-ups). Descriptive, private-by-default. Default OFF → no debrief.
+    debrief: bool = False
+    # Stage-6 §4.12 · company intelligence: a company URL at setup → SSRF-guarded
+    # scoped crawl + web research → a typed OrgBrief (identity, product+evidence,
+    # offerings, stack, focus, trajectory, per-fact freshness) → session L3
+    # context; org-questions (canonicalizer gate) are answered from the brief,
+    # band-shaped, cached per company (7-day freshness). Default OFF → today's
+    # deterministic research brief. Fail-open.
+    company_intel: bool = False
+    org_brief_ttl_days: float = 7.0
+    # Stage-6 §4.18 · candidate profile + prepared-answer library: a resume →
+    # typed Career Graph (roles/projects/metrics with SOURCE SPANS = the
+    # authoritative envelope answers may not exceed) + a background prepared-
+    # answer library; session setup is a cheap JD-tailoring delta. Default OFF →
+    # today's `CandidateProfile` + `prepared.py` path. Fail-open.
+    profile_library: bool = False
+    # Stage-6 §4.3 · band contracts precompute: the seniority BAND + career TRACK
+    # + guidance are computed ONCE at profile-land and PINNED (not recomputed each
+    # turn), and each band carries a structural answer contract (depth, ownership
+    # language, sections, must-include / avoid). Default OFF → today's per-turn
+    # `calibration_directive`. Fail-open.
+    band_contracts: bool = False
+
     # Phase 7 — audio capture & transport reliability.
     # Topology-aware capture routing (candidate-mic / loopback / both).
     capture_topology: bool = False
@@ -1668,6 +2158,14 @@ class DecisionCoreSection(BaseModel):
     risk_scoring: bool = True          # numeric risk → answer-band nudge
     risk_band_weight: float = 0.05     # band delta at HIGH risk (LOW gets -w/2)
     persist_assumptions: bool = True   # record assume-mode assumptions in ledger
+    # Stage-7 §3.7 · clarification engine vNext: ONE decision policy over the
+    # §3.13 interpretation brief — a missing slot is CLARIFIED only when it is
+    # MATERIAL (changes the answer) AND guessing wrong is COSTLY; otherwise
+    # ASSUME-AND-LABEL (make the assumption, record it in the ledger, proceed).
+    # At most one question per turn, `clarify_budget` per task; a contradiction
+    # always asks (can't assume through it). Default OFF → today's gate.
+    clarify_v2: bool = False
+    clarify_budget: int = 2
 
 
 class PolicySection(BaseModel):
@@ -1705,6 +2203,15 @@ class SandboxSection(BaseModel):
     # 2026-07-09: agent workspace build/test commands are bwrap-confined on
     # Linux (filesystem RO except the workspace; network KEPT for installs).
     harden_runner: bool = True
+    # Stage-4 §3.1 · warm sandbox pool: keep a few pre-created, ready-to-use
+    # workspaces so a verify run pays ~20-50 ms setup instead of a cold
+    # mkdtemp + runtime cold-start — what makes "verify every code answer"
+    # free-feeling. A used workspace is always DESTROYED (throw-the-world-away);
+    # the pool amortizes creation only, never reuses. Default OFF → today's cold
+    # path, byte-identical. (No-op win on the docker backend — its container is
+    # already persistent.)
+    warm_pool: bool = False
+    pool_size: int = 3
 
 
 class ArtifactValidationSection(BaseModel):
@@ -1853,6 +2360,18 @@ class SemanticIntentSection(BaseModel):
     llm_disambiguation: bool = False
 
 
+class GpuSection(BaseModel):
+    """Stage-6 §9.1 · GPU admission & scheduling plane. `scheduler` on → the
+    single admission controller (`app/gpu/scheduler.py`) governs the 3 lanes
+    (realtime / interactive / background) against a VRAM reservation ledger with a
+    `max_live_sessions` cap and a defined degrade order under contention. Default
+    OFF → today's unmanaged, best-effort GPU use."""
+    scheduler: bool = False
+    total_vram_mb: int = 24_000          # e.g. an RTX 5060 / A10-class card
+    max_live_sessions: int = 2
+    bg_headroom_mb: int = 1_000          # free VRAM a background task must leave
+
+
 class ToolsSection(BaseModel):
     """Tool dispatch."""
     # Let MEASURED per-tool reliability steer dispatch, not just be recorded.
@@ -1879,6 +2398,7 @@ class Config(BaseModel):
         default_factory=QuestionDetectionSection
     )
     code_solver: CodeSolverSection = Field(default_factory=CodeSolverSection)
+    chat: ChatSection = Field(default_factory=ChatSection)
     web_search: WebSearchSection = Field(default_factory=WebSearchSection)
     git_workflow: GitWorkflowSection = Field(default_factory=GitWorkflowSection)
     ui: UISection = Field(default_factory=UISection)
@@ -1901,10 +2421,18 @@ class Config(BaseModel):
     technical_pipeline: TechnicalPipelineSection = Field(default_factory=TechnicalPipelineSection)
     intent_profiles: IntentProfilesSection = Field(
         default_factory=IntentProfilesSection)
+    freshness: FreshnessSection = Field(default_factory=FreshnessSection)
+    tasks: TasksSection = Field(default_factory=TasksSection)
+    deploy: DeploySection = Field(default_factory=DeploySection)
+    ops: OpsSection = Field(default_factory=OpsSection)
+    voice: VoiceSection = Field(default_factory=VoiceSection)
+    eval: EvalSection = Field(default_factory=EvalSection)
+    distillation: DistillationSection = Field(default_factory=DistillationSection)
     understanding: UnderstandingSection = Field(
         default_factory=UnderstandingSection)
     synthesis: SynthesisSection = Field(default_factory=SynthesisSection)
     privacy: PrivacySection = Field(default_factory=PrivacySection)
+    security: SecuritySection = Field(default_factory=SecuritySection)
     calibration: CalibrationSection = Field(default_factory=CalibrationSection)
     tool_loop: ToolLoopSection = Field(default_factory=ToolLoopSection)
     resilience: ResilienceSection = Field(default_factory=ResilienceSection)
@@ -1918,6 +2446,7 @@ class Config(BaseModel):
     personalization: PersonalizationSection = Field(
         default_factory=PersonalizationSection)
     live: LiveSection = Field(default_factory=LiveSection)
+    gpu: GpuSection = Field(default_factory=GpuSection)
     # Centralized tuning knobs (was scattered code literals).
     confidence: ConfidenceSection = Field(default_factory=ConfidenceSection)
     decision_core: DecisionCoreSection = Field(

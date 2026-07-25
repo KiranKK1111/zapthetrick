@@ -35,6 +35,14 @@ class OpenAICompatAdapter(BaseAdapter):
                 )
         except httpx.HTTPError as exc:
             raise ProviderError(f"{self.name}: {exc}", retryable=True) from exc
+        # §2.7 quota header-correction: record the response's rate-limit headers
+        # (task-local) so the engine can reconcile the quota ledger — including
+        # the Retry-After on a 429, which is exactly where the truth lives.
+        try:
+            from app.llm import usage as _usage
+            _usage.record_headers(resp.headers)
+        except Exception:  # noqa: BLE001
+            pass
         if resp.status_code != 200:
             raise ProviderError(
                 f"{self.name} API error {resp.status_code}: {resp.text[:300]}",

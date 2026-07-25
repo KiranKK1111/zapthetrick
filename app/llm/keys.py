@@ -6,6 +6,7 @@ keys (enabled + healthy/unknown) for round-robin selection.
 """
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select, update
@@ -18,6 +19,17 @@ from storage.models import LLMApiKey
 
 class KeysUnavailable(RuntimeError):
     """Raised when the DB isn't ready, so callers can surface a clear error."""
+
+
+def _scope_user() -> uuid.UUID | None:
+    """The current request's user id (per-user keys, §10.1c). None in anonymous
+    / auth-off mode → callers scope to the legacy global (``user_id IS NULL``)
+    rows, so today's single-set-of-keys behaviour is preserved byte-for-byte."""
+    try:
+        from storage.context import get_request_user_id
+        return get_request_user_id()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @dataclass
@@ -52,6 +64,7 @@ async def add_key(platform: str, key: str, label: str = "") -> KeyView:
     enc, iv, tag = crypto.encrypt(key)
     async with _factory()() as session:
         row = LLMApiKey(
+            user_id=_scope_user(),
             platform=platform,
             label=label.strip(),
             encrypted_key=enc,
@@ -72,7 +85,7 @@ async def list_keys(platform: str | None = None) -> list[KeyView]:
         await crypto.ensure_initialized()
     except Exception:  # noqa: BLE001 — degrade to "****" masks, don't fail the list
         pass
-    stmt = select(LLMApiKey)
+    stmt = select(LLMApiKey).where(LLMApiKey.user_id == _scope_user())
     if platform:
         stmt = stmt.where(LLMApiKey.platform == platform)
     stmt = stmt.order_by(LLMApiKey.platform, LLMApiKey.id)
@@ -92,15 +105,31 @@ async def list_keys(platform: str | None = None) -> list[KeyView]:
 async def set_enabled(key_id: int, enabled: bool) -> None:
     async with _factory()() as session:
         await session.execute(
-            update(LLMApiKey).where(LLMApiKey.id == key_id).values(enabled=enabled)
+            update(LLMApiKey)
+            .where(LLMApiKey.id == key_id, LLMApiKey.user_id == _scope_user())
+            .values(enabled=enabled)
+        )
+        await session.commit()
+
+
+async def set_status(key_id: int, status: str) -> None:
+    """Set a key's health status directly (used by the §2.8 import gate to
+    correct an inconclusive at-upload validation back to a usable state)."""
+    async with _factory()() as session:
+        await session.execute(
+            update(LLMApiKey)
+            .where(LLMApiKey.id == key_id, LLMApiKey.user_id == _scope_user())
+            .values(status=status)
         )
         await session.commit()
 
 
 async def delete_key(key_id: int) -> None:
+    uid = _scope_user()
     async with _factory()() as session:
         row = await session.get(LLMApiKey, key_id)
-        if row is not None:
+        # Only the owning user (or anonymous → NULL-owned rows) may delete.
+        if row is not None and row.user_id == uid:
             await session.delete(row)
             await session.commit()
 
@@ -108,7 +137,9 @@ async def delete_key(key_id: int) -> None:
 async def key_counts() -> dict[str, dict]:
     """Per-platform {total, enabled, healthy} for the catalog screen."""
     async with _factory()() as session:
-        rows = (await session.execute(select(LLMApiKey))).scalars().all()
+        rows = (await session.execute(
+            select(LLMApiKey).where(LLMApiKey.user_id == _scope_user())
+        )).scalars().all()
     counts: dict[str, dict] = {}
     for r in rows:
         c = counts.setdefault(r.platform, {"total": 0, "enabled": 0, "healthy": 0})
