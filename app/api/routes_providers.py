@@ -189,6 +189,73 @@ async def add_key(platform: str, body: dict) -> dict:
     }
 
 
+@router.get("/_diagnose")
+async def diagnose_catalog() -> dict:
+    """Why are 0 models showing (esp. on a fresh RunPod deploy)? Reports the
+    request's user_id, model counts (this-user vs ALL users), and per-key
+    DECRYPTION success — WITHOUT leaking the key. Reads:
+      * keys don't decrypt  → ZAPTHETRICK_ENCRYPTION_KEY mismatch (the usual pod
+        cause: restored a DB whose keys were encrypted with a different master
+        key, or the key isn't stable across deploys). Fix = stable key / re-add.
+      * models_all_users > 0 but models_this_user == 0, and the keys' user_id
+        differs from request_user_id → the catalog is under a DIFFERENT account
+        (a DB restore under the old user; the pod login is a new user).
+    Safe to expose: no secret values, only booleans/lengths/ids."""
+    from sqlalchemy import func
+
+    from app.api.auth import current_user_id
+    from app.llm import crypto
+    from storage.db import get_session_factory
+    from storage.models import LLMApiKey, LLMModel
+
+    uid = current_user_id()
+    out: dict = {
+        "request_user_id": uid,
+        "encryption_ready": False,
+        "models_this_user": 0,
+        "models_all_users": 0,
+        "keys": [],
+    }
+    try:
+        await crypto.ensure_initialized()
+        out["encryption_ready"] = True
+    except Exception as exc:  # noqa: BLE001
+        out["encryption_error"] = str(exc)[:200]
+
+    factory = get_session_factory()
+    if factory is None:
+        out["error"] = "database not ready"
+        return out
+    async with factory() as session:
+        out["models_all_users"] = int(
+            (await session.execute(
+                select(func.count()).select_from(LLMModel))).scalar() or 0)
+        if uid is not None:
+            out["models_this_user"] = int(
+                (await session.execute(
+                    select(func.count()).select_from(LLMModel)
+                    .where(LLMModel.user_id == uid))).scalar() or 0)
+        keys = (await session.execute(select(LLMApiKey))).scalars().all()
+        for k in keys:
+            row = {
+                "platform": k.platform,
+                "user_id": str(k.user_id),
+                "user_matches_request": str(k.user_id) == str(uid),
+                "status": k.status,
+                "enabled": k.enabled,
+                "decrypts": None,
+            }
+            try:
+                plain = crypto.decrypt(k.encrypted_key, k.iv, k.auth_tag)
+                row["decrypts"] = bool(plain) and len(plain) >= 8
+                row["key_len"] = len(plain or "")
+            except Exception as exc:  # noqa: BLE001
+                row["decrypts"] = False
+                row["decrypt_error"] = str(exc)[:140]
+            out["keys"].append(row)
+    return out
+
+
 @router.patch("/keys/{key_id}")
 async def patch_key(key_id: int, body: dict) -> dict:
     enabled = (body or {}).get("enabled")
