@@ -7,44 +7,38 @@ llm:
   routing:
     enabled: true
     sticky_sessions: true
-    # Cap the fallback storm (was 20 → multi-minute hangs on flaky free tiers).
-    max_retries: 6
+    max_retries: 15
     penalty_per_429: 3
     decay_interval_s: 120
-    # Abandon a model that hasn't produced its first token within this many
-    # seconds and fall to the next — the primary "stuck / Waiting for reply…"
-    # guard. Lowered to 5s so a slow/free-tier provider fails over to a faster
-    # one sooner (snappier first token). 0 disables.
     first_token_deadline_s: 5.0
   model: meta-llama/llama-3.1-8b-instruct
   code_model: google/gemini-2.5-flash
   vision_model: google/gemini-2.5-flash
   classifier_model: meta-llama/llama-3.1-8b-instruct
-  # Live Listen answer model — a FAST first-token PREFERENCE (the router still
-  # falls back through every model + escalates hard/expert). Uncomment ONE that
-  # matches a key you added in Settings -> Providers:
-  #   Groq:     live_model: llama-3.3-70b-versatile
-  #   Cerebras: live_model: llama-4-maverick-17b-128e-instruct
-  # live_model: llama-3.3-70b-versatile
-  # Live answers are DETAILED like chat (full prompt) and bounded by tokens.
+  live_model: llama-3.3-70b-versatile
+  effort_dial: false
   live_max_tokens: 4000
-  live_first_token_timeout: 12.0
+  live_first_token_timeout: 20.0
   live_detailed: true
   base_url: http://localhost:11434
-  openrouter_api_key: ""
+  openrouter_api_key: ''
   openrouter_base_url: https://openrouter.ai/api/v1
-  nvidia_api_key: ""
+  nvidia_api_key: ''
   nvidia_base_url: https://integrate.api.nvidia.com/v1
   temperature: 0.3
   max_tokens: 10000
   timeout_seconds: 120.0
   fallback_model: null
+  stream_guard: true
+  stream_max_chars: 120000
+  repetition_max_repeats: 3
+  chat_stream_budget_s: 300.0
 embeddings:
   provider: sentence_transformers
-  model: BAAI/bge-m3                  # 1024-dim, multilingual; matches pgvector(1024)
-  device: auto   # auto = CUDA when present (fast resume ingest); cpu on the VPS
+  model: BAAI/bge-m3
+  device: cpu
 vector_store:
-  provider: pgvector                  # one store: embeddings + RAG vectors + BM25 in Postgres
+  provider: pgvector
   collection: resumes
   persist_dir: ./data/vectors
 reranker:
@@ -57,75 +51,72 @@ rag:
   top_k_rerank: 5
   hybrid_search: true
 stt:
-  # FULLY LOCAL STT — no API engines, no keys. DEFAULT is Qwen3-ASR (high-
-  # accuracy multilingual, GPU-preferring) for the 24GB GPU-server deploy. On a
-  # small/laptop machine switch to "parakeet" (tiny, ~8x realtime int8 on CPU)
-  # via the STT model switcher in the app.
-  #
-  # No fallback by default: only the primary provider is warmed/downloaded, so
-  # the first-run "Preparing models" screen shows exactly the primary + the
-  # embedder — nothing else and no fallback error.
-  provider: qwen_asr
+  mode: local
+  cloud_model: whisper-large-v3-turbo
+  provider: faster_whisper
   fallback_providers: []
+  model: large-v3
+  device: cpu
+  compute_type: float16
+  language: null
+  beam_size: 1
+  cpu_threads: 4
   qwen_model: Qwen/Qwen3-ASR-1.7B
-  qwen_language: null            # null = autodetect (multilingual)
+  qwen_language: null
   parakeet_model: nemo-parakeet-tdt-0.6b-v3
   parakeet_quantization: int8
-  # Streaming partials: interim transcripts while the speaker is talking,
-  # produced by this fast local provider ("" disables).
-  partial_provider: parakeet
-  # Reuse a completed partial as the FINAL transcript when it covered exactly
-  # the finalized audio and the partial engine IS the final engine — skips
-  # the redundant re-transcription on the answer's critical path.
+  parakeet_use_gpu: true
+  partial_provider: faster_whisper
   final_from_partial: true
-  # base.en + hotword biasing (vocab booster) is the sweet spot: ~0.8-1.0s
-  # per utterance on CPU (3-4x faster than small.en) with EQUAL accuracy on
-  # technical terms because the hotwords fix what base.en would otherwise
-  # mangle (measured 5/5 terms, "bean lifecycle ... Kubernetes ... Postgres").
-  # Bump to small.en only if you hit accuracy issues on very noisy audio.
-  model: base.en
-  device: cpu
-  compute_type: int8
-  language: en
-  # CPU threads for transcription. 4 is optimal here — more threads add
-  # contention and SLOW a single utterance (measured), they don't speed it.
-  cpu_threads: 4
-  # beam_size 1 (greedy) is ~1.5x faster than beam 5 with no measured
-  # accuracy loss on live utterances once hotword biasing is on — the right
-  # trade for snappy live responses. Raise to 5 if you ever need max accuracy
-  # on very noisy audio at the cost of latency.
-  beam_size: 1
   dual_engine_enabled: false
   secondary_provider: null
   vocab_boost_enabled: true
-  # Feed the vocabulary booster's term list as faster-whisper `hotwords`
-  # (a stronger bias than initial_prompt) so domain names survive.
   hotwords_enabled: true
+  cloud_chain: null
+  prompt: A technical software-engineering interview. The interviewer asks clear questions about computer science, programming, and system design.
+vision:
+  enabled: true
+  mode: local
+  cloud_max_side: 1568
+  cloud_jpeg_quality: 85
+  cloud_max_tokens: 1000
+  cloud_retries: 3
+  cloud_attempt_timeout: 28.0
+  ocr_min_side: 1600
+  ocr_max_side: 2600
+  vision_latency_weight: 0.2
+  code_prompt: 'This is a screenshot of a coding site or IDE (e.g. LeetCode, HackerRank, VS Code). Your reply MUST BEGIN with one line exactly: ''Language: <name>''. Determine <name> by reading the editor''s LANGUAGE SELECTOR — a small dropdown/label at the TOP of the code editor panel (often top-left or top-right, shown next to a small chevron ''⌄'', lock, or ''Auto'', e.g. ''Swift'', ''Java'', ''Python3'', ''C++'', ''Dart'', ''Go''). Read that chip EXACTLY — do NOT guess and do NOT assume Python. Look carefully even if the chip is small. If no selector is visible at all, infer the language from the starter-code syntax and the file extension and name your best reading. After that first line, transcribe ONLY the coding problem and its code editor — the problem statement, the examples/constraints, and the code stub verbatim (preserve the exact class/method names, types and signature). IGNORE everything unrelated: the desktop, taskbar, browser tabs/chrome, other windows, menus, and side panels — do not describe them. Be concise: no commentary. Do NOT write, complete, translate, fix, or invent any code, and do NOT solve the problem — only transcribe the problem and its starter code.'
+  cloud_difficulty: trivial
+  provider: smolvlm_500m
+  fallback_providers:
+  - qwen2_5_vl
+  smolvlm_small_model: HuggingFaceTB/SmolVLM-500M-Instruct
+  smolvlm_model: HuggingFaceTB/SmolVLM-Instruct
+  qwen_vl_model: Qwen/Qwen2.5-VL-3B-Instruct
+  qwen_vl_load_8bit: false
+  minicpm_model: openbmb/MiniCPM-V-2_6
+  use_gpu: true
+  max_new_tokens: 512
+  ocr_enabled: true
+  ocr_provider: rapid_ocr
+  cache_enabled: true
+  cache_max_entries: 128
+  prompt: Transcribe all text in this image exactly as written, in reading order. Preserve layout with markdown — tables for tables, fenced code blocks for code. If a programming language is shown or selected (a language selector, a code editor, or code), name that language explicitly. If a non-text visual is present (chart, diagram, photo, UI control), add one short line naming it and what it shows. Output only what is visibly present. Do NOT summarize, analyze, answer, calculate, explain, or invent anything not shown.
 audio:
   source: system_loopback
   sample_rate: 16000
-  chunk_ms: 500
+  chunk_ms: 200
   vad: silero
   vad_threshold: 0.5
-  # Silence gap that ends a LONG utterance. A SHORT utterance (< min_utterance_ms
-  # of speech, e.g. "What") needs the longer short_utterance_gap_ms before it
-  # finalizes, so a brief mid-question breath doesn't cut "What <breath> is
-  # microservices?" down to just "What" (adaptive endpointing).
   endpoint_silence_ms: 650
   min_utterance_ms: 700
   short_utterance_gap_ms: 1200
-  # End-of-speech partial: after this much trailing silence, snapshot one
-  # extra partial immediately (bypassing partial_interval_ms) so the trailing
-  # '?' that unlocks the early endpoint gap + speculative answering is fresh.
+  max_utterance_ms: 15000
+  partial_min_ms: 400
+  partial_interval_ms: 500
   end_partial_trailing_ms: 160
-  # Gap that ends an utterance whose partial reads MID-THOUGHT ("Can you
-  # tell me" — even with an ASR-guessed '?'): wait longer than the normal
-  # endpoint so a thinking pause doesn't chop the question into fragments.
   incomplete_gap_ms: 1200
-  # Pre-speech audio prepended at utterance start (soft onsets not clipped).
   preroll_ms: 240
-  # Within this window after prior speech the VAD start threshold relaxes by
-  # vad_reentry_delta, so quieter continuations still open the gate.
   vad_reentry_window_ms: 3000
   vad_reentry_delta: 0.15
 question_detection:
@@ -136,14 +127,40 @@ question_detection:
   recent_q_window: 3
 code_solver:
   default_language: python
+  ask_when_language_unknown: true
+  differential_testing: true
+  differential_always: false
+  differential_thin_examples: 2
+  differential_cases: 50
+  complexity_check: false
+  complexity_flag_ratio: 3.0
   include_complexity: true
   include_edge_cases: true
   include_alternatives: true
   two_step_solve: true
   ocr_max_tokens: 1500
+  structured_extraction: false
+  selected_language_min_conf: 0.7
+  fingerprint_cache: false
+  toolchain_prefetch: false
+  patch_edits: false
+  verify_chat_code: false
+  verify_chat_max_repairs: 2
+  verify_chat_deadline_s: 180.0
+chat:
+  fast_lane: false
+  input_warmup: false
+  interpretation: true
+  variation_engine: true
 web_search:
   provider: duckduckgo
   max_results: 5
+git_workflow:
+  enabled: true
+  branch_prefix: zapthetrick
+  auto_push: false
+  open_pr: false
+  token: ''
 ui:
   themes_path: ./themes/
   show_confidence: true
@@ -156,16 +173,16 @@ server:
   - '*'
 database:
   postgres:
-    host: localhost
-    port: 5432
+    host: 127.0.0.1
+    port: 5433
     db: postgres
     schema_name: zapthetrick
     user: postgres
-    password: ""
-    password_ref: ""
+    password: changeme
+    password_ref: pg_password
     pool_min: 5
     pool_max: 20
-    enable_age: true
+    enable_age: false
     enable_pg_search: false
   cache:
     backend: dragonfly
@@ -176,9 +193,9 @@ database:
     blobs_path: ./data/blobs
     minio_endpoint: null
     minio_access: null
-    minio_secret: ""
+    minio_secret: null
     minio_access_ref: null
-    minio_secret_ref: ""
+    minio_secret_ref: null
   migrations:
     auto_apply: true
     migrations_dir: ./storage/migrations
@@ -201,7 +218,7 @@ agents:
     grounder: true
     critic: true
     reflector: true
-    suggester: true
+    suggester: false
   priorities:
     p0:
     - supervisor
@@ -223,6 +240,9 @@ agents:
     first_token: 1500
     total: 8000
     p1_grace: 1500
+  deep_research: true
+  deep_research_max_workers: 4
+  deep_research_result_cap: 1000
 advanced_rag:
   embedding_model: BAAI/bge-m3
   use_hierarchical_chunking: true
@@ -231,22 +251,81 @@ advanced_rag:
   use_contextual_compression: true
   use_mmr: true
   use_knowledge_graph: true
+  kg_suggestions: false
   small_to_big_retrieval: true
   top_k_retrieve: 30
+  span_citations: true
+  span_citation_min_score: 0.4
   top_k_rerank: 10
   top_k_final: 5
   compression_target_ratio: 0.4
+  use_code_knowledge_graph: true
+  code_graph_summary_chars: 6000
+  materialize_workspace: true
+  max_concurrent_agent_runs: 3
+  redact_agent_secrets: true
+  use_context_builder: true
+  context_budget_tokens: 6000
+  context_v2: true
+  repo_digest: true
+  cross_step_scratchpad: true
+  todo_list: true
+  todo_planner: true
+  test_first_rigor: true
+  strict_test_gate: false
+  agent_web_tools: true
+  cognitive_cache: true
+  cognitive_cache_ttl_s: 3600
+  cognitive_cache_max: 512
+  cognitive_cache_temp_ceiling: 0.5
+  semantic_cache: false
+  semantic_cache_slow_ttl_s: 600
+  semantic_cache_near: false
+  semantic_cache_near_threshold: 0.97
+  semantic_cache_near_max: 64
+  prefer_recent_model: true
+  self_improve: false
+  self_improve_n: 3
+  reflection_notes: true
+  content_safety: true
+  injection_guard: true
+  red_team_review: true
+  surface_confidence: true
+  project_brain: true
+  cross_model_verify: true
+  council_size: 1
+  upload_quality_checks: true
+  use_tool_executor: true
+  difficulty_aware_routing: true
+  self_refine: false
+  verify_levels: []
+  refine_rounds: 1
+  verify_draft_timeout: 30.0
+  verify_step_timeout: 20.0
+  clarify_grace_ms: 900
 memory:
   episodic_enabled: true
   semantic_enabled: true
   reflection_on_idle_minutes: 5
   reflection_on_session_end: true
   user_owns_memory: true
+  graph_enabled: true
+  inject_into_context: true
+  retrieval_k: 6
+  relevance_threshold: 0.35
+  half_life_days: 30.0
+  max_objects_per_scope: 500
+  surface_memory: true
+  retention_days: 0
+  auto_compaction: true
+  compaction_window_ratio: 0.7
 learning:
   online_critique: true
   online_revision_threshold: 0.6
   feedback_capture: true
   speculative_execution: true
+  online_eval_sample_rate: 0.0
+  answer_first_v2: false
 ui_advanced:
   layout_density: comfortable
   show_tool_chips: true
@@ -269,6 +348,38 @@ mcp:
 response_arch:
   enabled: true
   default_depth: standard
+  mermaid_lane: true
+  mermaid_max_nodes: 60
+  mermaid_label_wrap: 24
+documents:
+  section_numbering: true
+  table_of_contents: true
+  excel_charts: true
+  explicit_only: true
+  deliverable_engine: false
+  visual_qa: false
+  typst: false
+  typst_bin: ''
+  visual_qa_repair_rounds: 0
+  export_concurrency: 2
+  export_timeout_s: 120.0
+  export_max_retries: 1
+  export_retry_backoff_s: 0.2
+  reuse_existing_artifact: true
+  code_lint_review: true
+  multi_pass_assembly: true
+  multi_reviewer: false
+  auto_structure: true
+  quality_strict: false
+  llm_review: false
+  model_driven_render: true
+  sandbox_render: false
+  verify_coverage_min: 0.6
+  diff_edits: true
+  preview_panel: true
+  design_system: true
+  design_wcag_level: AA
+  session_export: true
 continuity:
   auto_link: true
   auto_link_threshold: 0.65
@@ -276,16 +387,193 @@ continuity:
 technical_pipeline:
   enabled: true
   force_domain: null
+intent_profiles:
+  enabled: true
+  profiles: {}
+freshness:
+  classifier: true
+  threshold: 0.55
+tasks:
+  enabled: true
+  max_concurrency: 2
+deploy:
+  drain: false
+  drain_deadline_s: 30.0
+ops:
+  gc: false
+  export: false
+  redirector: false
+  resurrect_after_failures: 3
+voice:
+  tts: true
+  tts_engine: edge
+  loop: false
+  wake_word: false
+  conversational_intel: true
+  emotion: true
+  emotion_mode: local
+  multilingual: true
+eval:
+  flywheel: true
+  canary: false
+  canary_fraction: 0.1
+  canary_min_samples: 50
+  canary_margin: 0.02
+distillation:
+  enabled: true
+  min_confidence: 0.7
+understanding:
+  enabled: true
+  topic_shift_similarity: 0.35
+  route_from_understanding: true
+synthesis:
+  enabled: false
+  max_sections: 5
+  min_output_complexity: large
+  self_eval: false
+  max_concurrency: 3
+  section_timeout_s: 90
+privacy:
+  redact_egress: secrets
+security:
+  quarantine: true
+  strict_taint: true
+calibration:
+  enabled: true
+  min_samples: 20
+tool_loop:
+  enabled: true
+  max_rounds: 3
+  min_difficulty: expert
+  tools:
+  - code_solver
+  - web_search
+  - code_search
+  - resume_lookup
+  conversation_search: true
+  interleaved: true
+  interleaved_interactive_budget: 3
+  interleaved_task_budget: 15
+resilience:
+  mid_stream_continuation: false
+  max_continuations: 2
+  seam_buffer_chars: 200
+  pre_connect: false
+  pre_connect_top_n: 3
+  pre_connect_min_interval_s: 30.0
+  route_no_route_retries: 3
+  route_backoff_ms: 400
+  recovery_planner: true
+  recovery_backoff_max_ms: 1000
+  replay_enabled: true
+routing:
+  route_all_models: true
+  prefer_free: true
+  strong_tier_for_hard: false
+  strong_tier_difficulties:
+  - expert
+  monthly_paid_request_cap: 0
+  capability_routing: true
+  task_match_weight: 6.0
+  escalation: false
+  multi_model: false
+  meta_router: true
+  learning_router: true
+  learn_weight: 4.0
+  semantic_learning: false
+  adaptive_benchmark: true
+  route_trace: true
+  latency_aware: true
+  latency_weight: 8.0
+  latency_baseline_s: 8.0
+  canonical_identity: false
+  task_profiles: false
+  profile_verify_weight: 0.0
+  profile_weight_matrix: false
+  profile_latency_weight: 0.15
+  circuit_breaker: true
+  circuit_fail_threshold: 3
+  circuit_cooldown_s: 30.0
+  free_only: true
+  free_only_emergency_paid: true
+  quota_aware: true
+  quota_weight: 12.0
+  quota_exhausted_penalty: 250.0
+  quota_skip_exhausted: true
+  quota_planning: false
+  spread: false
+  live_reserve: false
+  live_reserve_fraction: 0.3
+  spread_weight: 8.0
+  two_stage: false
+  gauntlet: false
+  live_plan: false
+perceived:
+  speculation_enabled: true
+  max_concurrent_drafts: 2
+  speculation_period_budget: 60
+  speculation_period_seconds: 3600
+  connection_idle_timeout_s: 60.0
+  predictive_cache_max_entries: 256
+  cache_similarity_threshold: 0.95
+  speculative_drafting: true
+  progressive_context: false
+  background_research: true
+  predictive_prefetch: true
+  idle_work: true
+  slow_provider_threshold_s: 0.0
+  ttft_ack_threshold_s: 0.8
+  answer_cache: true
+  observatory_enabled: true
+followup:
+  enabled: true
+  max_decisions: 32
+  max_constraints: 32
+  max_entities: 64
+  max_open_questions: 16
+  max_enumerations: 12
+  followup_confidence_threshold: 0.6
+  resolution_confidence_threshold: 0.6
+  rewrite_confidence_threshold: 0.6
+  surface_interpretation: true
+quality:
+  aggregate_confidence: true
+  grounder_autocorrect: true
+  grounder_autocorrect_timeout_s: 3.5
+  grounder_autocorrect_min_claims: 2
+  stream_control: true
+  governor: true
+  degradation: true
+  critic: true
+  surface_meta: true
+tools:
+  reliability_routing: true
+workspace:
+  workspace_enabled: true
+  artifacts_enabled: true
+  max_artifact_versions: 20
+  artifact_min_chars: 400
+  surface_artifact: true
+orchestration:
+  enabled: true
+  planner_decompose: true
+  max_subtasks: 6
+  max_roles: 4
+  max_tools: 8
+  max_iterations: 3
+  sandbox_verify: false
+  generate_tests: false
+  surface_orchestration: true
+personalization:
+  user_model_enabled: true
+  adapt_depth: true
+  frustration_detection: true
+  topic_policy: true
+  analytics_enabled: true
+  surface_meta: true
+  custom_instructions: true
+  embedded_followup: true
 live:
-  # Hard budget (seconds) on one answer's generation; past it the partial
-  # answer is kept and the session moves on.
-  answer_timeout_s: 60
-  # Post-LLM VERIFIER: score every finished answer (relevance + hallucination
-  # risk; non-blocking) and regenerate once on a weak verdict.
-  answer_verify: true
-  answer_regenerate: true
-  verify_min_relevance: 0.55
-  verify_max_hallucination: 0.75
   structured_events: true
   state_machine: true
   turn_taking: true
@@ -294,6 +582,8 @@ live:
   continuation_window_s: 8.0
   hypothetical_question: true
   prosody_promotion: true
+  accuracy_ledger: true
+  ledger_path: data/live_ledger.jsonl
   topic_graph: true
   multi_level_memory: true
   phase_detection: true
@@ -304,6 +594,7 @@ live:
   knowledge_gap_threshold: 0.5
   adaptive_latency: true
   transcript_repair: true
+  context_repair: true
   ensemble_detection: true
   interruption_handling: true
   satisfaction_detection: true
@@ -315,6 +606,45 @@ live:
   pii_redaction: true
   transcript_sanitization: true
   retention_days: 0
+  answer_timeout_s: 60.0
+  fast_question_path: true
+  speculative_answers: true
+  answer_verify: true
+  answer_regenerate: true
+  verify_min_relevance: 0.55
+  verify_max_hallucination: 0.75
+  answer_max_retries: 2
+  code_sandbox: false
+  code_max_fix: 1
+  preflight: false
+  audio_watchdog: false
+  silence_watchdog_s: 30.0
+  stt_failover: false
+  voice_contract: false
+  leak_guard: false
+  two_lane: false
+  stt_pair: false
+  speculation_v2: false
+  speculation_endpoint_threshold: 0.92
+  enrichment_budget_ms: 120.0
+  hedge_budget_ms: 700.0
+  repair_v2: false
+  canonicalize: false
+  said_state: false
+  answer_system: true
+  delivery_tracking: true
+  situational: true
+  panel_diarization: true
+  pre_answering: true
+  pre_answer_silence_ms: 4000.0
+  pre_answer_match_threshold: 0.92
+  screen_context: true
+  coach_mode: true
+  debrief: true
+  company_intel: true
+  org_brief_ttl_days: 7.0
+  profile_library: false
+  band_contracts: true
   capture_topology: true
   session_resume: true
   mobile_runtime: true
@@ -325,9 +655,20 @@ live:
   session_budget: true
   max_concurrent_answers: 3
   max_answers_per_session: 0
-  # Speaker diarization needs a heavy model — kept OFF on the CPU cluster.
-  # Candidate self-answer detection uses the lightweight echo check instead.
-  diarization: false
+  question_dedup: true
+  question_dedup_window_s: 20.0
+  question_dedup_similarity: 0.87
+  question_dedup_semantic: true
+  question_dedup_semantic_sim: 0.9
+  prepared_answers: true
+  prepared_count: 64
+  prepared_match_threshold: 0.86
+  prepared_pacing_s: 2.0
+  candidate_echo_skip: true
+  candidate_echo_threshold: 0.72
+  combine_multi_questions: true
+  factual_fast_path: true
+  diarization: true
   world_model: true
   objective_depth: true
   answer_revision: true
@@ -361,19 +702,180 @@ live:
   feedback_loop: true
   skill_gap: true
   cognitive_load: true
-  gpu_stt: false
+  conversation_signals: true
+  industry_context: true
+  capability_framing: true
+  gpu_stt: true
   career_intelligence: false
   enterprise_readiness: false
-  # Dual-source: hear BOTH voices; the candidate channel is absorbed into the
-  # shared graph + commitments and never answered. Powers salary negotiation
-  # awareness and candidate self-answer skipping.
   dual_source: true
   candidate_channel: true
   role_memory: true
   commitment_tracking: true
-  # Candidate self-answer echo skip: when the candidate speaks (or paraphrases)
-  # the answer already shown on screen, recognize it semantically and skip
-  # transcribing/answering it instead of treating it as a new question.
-  candidate_echo_skip: true
-  candidate_echo_threshold: 0.72
-
+  solo_mode: false
+gpu:
+  scheduler: false
+  total_vram_mb: 24000
+  max_live_sessions: 2
+  bg_headroom_mb: 1000
+confidence:
+  band_high: 0.9
+  band_assume: 0.7
+  band_targeted: 0.4
+  band_floor: 0.5
+  state_band_default: 0.9
+decision_core:
+  requirement_matrix: true
+  risk_scoring: true
+  risk_band_weight: 0.05
+  persist_assumptions: true
+  clarify_v2: false
+  clarify_budget: 2
+policy:
+  enabled: true
+  rules: []
+artifact_validation:
+  enabled: true
+  repair: true
+  degrade: true
+  verify_projects: true
+  repair_with_model: true
+  run_tests: true
+  test_timeout_s: 60.0
+  smoke_run: true
+  install_deps: false
+  repair_rounds: 2
+sandbox:
+  enabled: true
+  timeout_s: 25.0
+  cpu_s: 20
+  memory_mb: 1024
+  output_kb: 256
+  max_files_mb: 32
+  languages: []
+  backend: local
+  container: zapthetrick_sandbox
+  tool_dirs: []
+  harden_runner: true
+  warm_pool: false
+  pool_size: 3
+temperature:
+  classifier: 0.0
+  planning: 0.2
+  creative: 0.4
+  verify: 0.5
+  default: 0.2
+output_tokens:
+  label: 32
+  micro_label: 24
+  intent: 40
+  pattern: 100
+  short_json: 200
+  verdict: 400
+  council_pick: 120
+  council_gen: 500
+  redteam: 700
+model_markers:
+  vision_markers:
+  - vl
+  - vision
+  - gpt-4o
+  - gpt-4.1
+  - gpt-5
+  - o4-
+  - chatgpt-4o
+  - gemini
+  - claude-3
+  - claude-opus-4
+  - claude-sonnet-4
+  - claude-haiku-4
+  - llava
+  - pixtral
+  - qwen2-vl
+  - qwen2.5-vl
+  - qwen3-vl
+  - llama-3.2-11b-vision
+  - llama-3.2-90b-vision
+  - llama-4
+  - maverick
+  - scout
+  - gemma-3
+  - internvl
+  - minicpm-v
+  - phi-3.5-vision
+  - phi-4-multimodal
+  - grok-2-vision
+  - grok-4
+  - mistral-small-3.1
+  - mistral-small-3.2
+  - mistral-medium-3
+  - molmo
+  - aria
+  - deepseek-vl
+  - step-1v
+  - glm-4v
+  - glm-4.1v
+  - kimi-vl
+  - ernie-4.5-vl
+  - dots.vlm
+  moe_markers:
+  - mixtral
+  - deepseek-v2
+  - deepseek-v3
+  - deepseek-chat
+  - deepseek-r1
+  - dbrx
+  - jamba
+  - arctic
+  - llama-4
+  - gpt-oss
+  - minimax
+  - olmoe
+  - -moe
+  - moe-
+  no_capability_markers:
+  - base
+  - embed
+  - rerank
+  - -1b
+  - -2b
+  - tiny
+  category_markers:
+    coding:
+    - coder
+    - code
+    - codestral
+    - deepseek-coder
+    - qwen3-coder
+    - starcoder
+    - codegemma
+    math:
+    - math
+    - deepseek-math
+    - qwen2.5-math
+    - wizardmath
+    reasoning:
+    - reason
+    - -r1
+    - o1
+    - o3
+    - o4
+    - thinking
+    - qwq
+    - magistral
+    - deepseek-r1
+    vision:
+    - vl
+    - vision
+    - -vl-
+    - multimodal
+semantic_intent:
+  enabled: false
+  primary_threshold: 0.5
+  learn_exemplars: false
+  negative_penalty: 0.15
+  llm_disambiguation: false
+semantic_gates:
+  enabled: true
+  thresholds: {}
+  margins: {}

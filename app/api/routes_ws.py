@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 
 import numpy as np
@@ -379,6 +380,47 @@ def _coaching_tips(text: str) -> list[str]:
         return []
 
 
+# Non-lexical vocalizations / backchannels that must NOT take a conversational
+# turn on their own (VoiceModeArchitecture.md §"First Real Word Rule" /
+# §"recognized_word_count >= 1"): a cough, throat-clear, or "uh" the recognizer
+# renders as a lone token should be ignored, not answered. This is a lexical
+# floor — a genuine closed set, like number/date normalization — NOT intent
+# classification, so it stays literal. Only clear fillers are listed; real short
+# replies ("yes", "no", "stop", a single technical term) deliberately pass.
+_VOICE_FILLERS = frozenset({
+    "uh", "um", "umm", "uhh", "uhm", "hmm", "hm", "hmmm", "mm", "mmm",
+    "mhm", "mmhm", "mmhmm", "mm-hmm", "uh-huh", "uhhuh",
+    "ah", "ahh", "aha", "huh", "eh", "er", "err", "erm",
+})
+# Letter-runs in ANY script (re.UNICODE) so Hindi/Telugu/etc. words count as
+# words; digits/punctuation are excluded so "." or "?" alone is not "a word".
+_VOICE_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def _voice_is_meaningful(text: str) -> bool:
+    """True when a final transcript is worth taking a conversational turn.
+
+    Rejects empty / punctuation-only strings and lone backchannels/fillers so a
+    cough or an "uh" can't launch a turn. Any multi-word utterance passes — a
+    filler can legitimately open a real sentence ("uh, what is Kafka?")."""
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    words = _VOICE_WORD_RE.findall(t)
+    if not words:
+        return False  # punctuation / digits only (".", "?")
+    if len(words) == 1:
+        w = words[0]
+        if w in _VOICE_FILLERS:
+            return False
+        # A lone stray ASCII letter ("a", "o") is STT noise, not a turn; a
+        # one-character non-Latin word (CJK / Indic base glyph) IS a real word,
+        # so the length floor is ASCII-only — never penalize Hindi/Telugu/etc.
+        return not (len(w) == 1 and w.isascii())
+    # Two+ words: ignore only if EVERY token is a filler ("uh um", "mm hmm").
+    return not all(w in _VOICE_FILLERS for w in words)
+
+
 @router.websocket("/ws/voice")
 async def voice_ws(
     websocket: WebSocket,
@@ -415,7 +457,9 @@ async def voice_ws(
 
     async def _on_utterance(text: str, full: str | None = None) -> None:
         t = (text or "").strip()
-        if t:
+        # First-real-word gate: a lone cough/"uh" that STT rendered as a token
+        # must not launch a turn (the "interrupts on small sounds" complaint).
+        if t and _voice_is_meaningful(t):
             await _send({"type": "transcript", "text": t})
 
     async def _on_partial(text: str) -> None:

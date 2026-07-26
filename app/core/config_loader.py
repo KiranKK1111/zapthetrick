@@ -176,7 +176,13 @@ class STTSection(BaseModel):
     model: str = "base.en"
     device: str = "cpu"
     compute_type: str = "int8"
-    language: str = "en"
+    # null / None = auto-detect the spoken language (Whisper is multilingual —
+    # English + Hindi/Telugu/Tamil/… ~99 languages). Pin e.g. "en" to force one.
+    language: str | None = "en"
+    # When auto-detecting (language=null), CONSTRAIN detection to this set so a
+    # short English clip isn't mis-read as Japanese/Korean. Empty list = fully
+    # unconstrained. Default (in whisper_stt) = English + major Indian languages.
+    allowed_languages: list[str] = []
     beam_size: int = 5
     cpu_threads: int = 4   # faster-whisper CPU threads (4 is optimal here)
     # Qwen3-ASR (provider "qwen_asr") — local multilingual STT (30 languages),

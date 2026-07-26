@@ -37,7 +37,9 @@ def test_stt_device_selects_gpu_when_available_and_enabled(monkeypatch):
     monkeypatch.setattr(_factory.cfg.live, "gpu_stt", True, raising=False)
     device, ctype = _factory.resolve_device()
     assert device == "cuda"
-    assert ctype == "float16"   # GPU compute type, not int8
+    # A GPU compute type, never plain CPU int8. int8_float16 (mixed) is preferred
+    # over float16 for less VRAM on an 8GB card; an explicit float16 is honored.
+    assert ctype in ("float16", "int8_float16")
 
 
 def test_stt_device_cpu_when_flag_off(monkeypatch):

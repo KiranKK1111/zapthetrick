@@ -82,6 +82,52 @@ def _build_request(spec, api_key: str | None) -> tuple[str, dict] | None:
     return url, headers
 
 
+async def fetch_model_ids(platform: str, api_key: str | None = None) -> set[str] | None:
+    """The set of model ids the provider CURRENTLY serves, or None.
+
+    None means "couldn't tell" (no key / transport error / non-200 / non-JSON) —
+    callers MUST treat None as unknown, never as "empty, so prune everything"
+    (last-known-good, §2.8). Used by the dead-model reaper to spot an enabled
+    routing model the provider has quietly dropped (e.g. an EOL id)."""
+    spec = get_provider_spec(platform)
+    if spec is None:
+        return None
+    if api_key is None:
+        api_key = await _resolve_key(platform)
+    if not api_key and not spec.allow_anonymous:
+        return None
+    req = _build_request(spec, api_key)
+    if req is None:
+        return None
+    url, headers = req
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=headers)
+    except httpx.HTTPError:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 — some endpoints serve HTML/empty
+        return None
+    if isinstance(body, list):
+        data = body
+    elif isinstance(body, dict):
+        data = body.get("data") or body.get("models") or []
+    else:
+        data = []
+    ids: set[str] = set()
+    for m in data:
+        if isinstance(m, str):
+            ids.add(m)
+        elif isinstance(m, dict):
+            mid = m.get("id") or m.get("name")
+            if mid:
+                ids.add(mid)
+    return ids
+
+
 async def discover_models(platform: str, api_key: str | None = None) -> dict:
     """Fetch `platform`'s /models and add any new ones (disabled).
 

@@ -240,6 +240,13 @@ async def _bootstrap_llm_routing(migration_task: "asyncio.Task") -> None:
     except Exception:  # noqa: BLE001
         log.exception("llm routing: health loop failed to start")
 
+    try:
+        from app.llm.model_reaper import start_reaper_loop
+
+        start_reaper_loop()  # proactively prune gone/EOL models from the catalog
+    except Exception:  # noqa: BLE001
+        log.exception("llm routing: dead-model reaper failed to start")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -491,6 +498,12 @@ async def lifespan(app: FastAPI):
             from app.llm.health import stop_health_loop
 
             stop_health_loop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from app.llm.model_reaper import stop_reaper_loop
+
+            stop_reaper_loop()
         except Exception:  # noqa: BLE001
             pass
         for t in (migration_task, llm_task, provision_task):

@@ -65,14 +65,19 @@ edge-tts==7.2.8
 # (core inference does not import gradio). For GPU: torch cu128 build.
 qwen-asr==0.0.6
 onnx-asr==0.11.0
-# GPU Parakeet (~50-120ms/utterance vs seconds on CPU). IMPORTANT: the
-# default PyPI onnxruntime-gpu 1.27 links CUDA *13* (no Windows pip wheels
-# for its DLLs); install the CUDA-12 build instead, matching torch cu12x:
-#   pip uninstall -y onnxruntime && \
-#   pip install onnxruntime-gpu --index-url \
+# GPU Parakeet (~36ms/utterance measured on RTX 5060, vs ~0.5-1.1s on CPU).
+# IMPORTANT: the default PyPI onnxruntime-gpu (1.27+) links CUDA *13*
+# (cublasLt64_13.dll) and silently drops to CPU on a CUDA-12 stack. Install the
+# CUDA-12 build from Microsoft's feed instead, matching torch cu12x. VERIFIED
+# working combo: onnxruntime-gpu 1.28.0 (CUDA-12) + nvidia-*-cu12 wheels. Must
+# have ONLY the gpu package (not plain `onnxruntime`, which shadows it):
+#   pip uninstall -y onnxruntime onnxruntime-gpu && \
+#   pip install onnxruntime-gpu==1.28.0 --index-url \
 #     https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
 #   pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-cudnn-cu12
-# Fail-open: without a GPU the code silently uses the int8 CPU model.
+# The CUDA EP loads cublasLt/cudnn as transitive deps: parakeet_stt._cuda_ready()
+# puts the nvidia-*-cu12 bin dirs on PATH + calls ort.preload_dlls() (NOT
+# torch/lib, whose cuDNN is a mismatched ABI). Fail-open: no GPU -> int8 CPU.
 
 # ---- Audio capture + VAD (Phase 4-5) -----------------------------------
 # sounddevice covers mic on all platforms; pyaudiowpatch is needed for

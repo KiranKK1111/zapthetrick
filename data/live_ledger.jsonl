@@ -11991,3 +11991,167 @@
 {"kind": "decision", "ts": 1784797399.4705932, "sid": "sid68", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
 {"kind": "decision", "ts": 1784797399.4705932, "sid": "sid69", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
 {"kind": "decision", "ts": 1784993211.9843633, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "bfe0b0364dc445dfa69550156ef5e99f", "utterance": "How to differentiate between this method", "decision": "answered", "reason": "speculative", "qtype": "technical_concept", "signals": {}}
+{"kind": "decision", "ts": 1785027713.2423544, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "343bcbd4c8194988ae03d2b9f56873d3", "utterance": "What is the difference between transformers and embeddings?", "decision": "answered", "reason": "speculative", "qtype": "technical_concept", "signals": {}}
+{"kind": "decision", "ts": 1785027727.382101, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "226a12b0fe5b483fbaafb30bee5511a2", "utterance": "What is the preference between Microservices and monolithic?", "decision": "answered", "reason": "", "qtype": "technical_concept", "signals": {}}
+{"kind": "decision", "ts": 1785030252.3933325, "sid": "s1", "qid": "q1", "utterance": "how would you scale kafka", "decision": "skipped", "reason": "duplicate_question", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.3953462, "sid": "s1", "qid": "q2", "utterance": "what is a hash map", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.3966005, "sid": "s2", "qid": "q3", "utterance": "tell me about yourself", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.3996174, "sid": "s1", "qid": "q1", "utterance": "x y z question", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4016185, "sid": "sid0", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.402626, "sid": "sid1", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.402626, "sid": "sid2", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.402626, "sid": "sid3", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.402626, "sid": "sid4", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.404054, "sid": "sid5", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.404054, "sid": "sid6", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.404054, "sid": "sid7", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4054735, "sid": "sid8", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4054735, "sid": "sid9", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4064903, "sid": "sid10", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4075277, "sid": "sid11", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4075277, "sid": "sid12", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4084828, "sid": "sid13", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4084828, "sid": "sid14", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4084828, "sid": "sid15", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4084828, "sid": "sid16", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4084828, "sid": "sid17", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4098096, "sid": "sid18", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4098096, "sid": "sid19", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4098096, "sid": "sid20", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4111292, "sid": "sid21", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4111292, "sid": "sid22", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4111292, "sid": "sid23", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4121659, "sid": "sid24", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4121659, "sid": "sid25", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4121659, "sid": "sid26", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4121659, "sid": "sid27", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4136717, "sid": "sid28", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4150965, "sid": "sid29", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4150965, "sid": "sid30", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4150965, "sid": "sid31", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4160962, "sid": "sid32", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4160962, "sid": "sid33", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4160962, "sid": "sid34", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4170966, "sid": "sid35", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4170966, "sid": "sid36", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4170966, "sid": "sid37", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4170966, "sid": "sid38", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4186485, "sid": "sid39", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4196572, "sid": "sid40", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4196572, "sid": "sid41", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4196572, "sid": "sid42", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4206696, "sid": "sid43", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4206696, "sid": "sid44", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4206696, "sid": "sid45", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4206696, "sid": "sid46", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4216578, "sid": "sid47", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4216578, "sid": "sid48", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4216578, "sid": "sid49", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4230723, "sid": "sid50", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4230723, "sid": "sid51", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4235864, "sid": "sid52", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4235864, "sid": "sid53", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4245996, "sid": "sid54", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4245996, "sid": "sid55", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4255993, "sid": "sid56", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4255993, "sid": "sid57", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4255993, "sid": "sid58", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4268832, "sid": "sid59", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4268832, "sid": "sid60", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4268832, "sid": "sid61", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4268832, "sid": "sid62", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4280891, "sid": "sid63", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4280891, "sid": "sid64", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4285948, "sid": "sid65", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4285948, "sid": "sid66", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4285948, "sid": "sid67", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4310045, "sid": "sid68", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785030252.4310045, "sid": "sid69", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031065.56, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "766a13822a1040f3abbc8fc69e33ab49", "utterance": "What is preference between microservices and logic?", "decision": "answered", "reason": "", "qtype": "technical_concept", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6390147, "sid": "s1", "qid": "q1", "utterance": "how would you scale kafka", "decision": "skipped", "reason": "duplicate_question", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6410186, "sid": "s1", "qid": "q2", "utterance": "what is a hash map", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6410186, "sid": "s2", "qid": "q3", "utterance": "tell me about yourself", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6450186, "sid": "s1", "qid": "q1", "utterance": "x y z question", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6460192, "sid": "sid0", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6460192, "sid": "sid1", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6470199, "sid": "sid2", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6470199, "sid": "sid3", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.64802, "sid": "sid4", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.64802, "sid": "sid5", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.64802, "sid": "sid6", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.64802, "sid": "sid7", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6490204, "sid": "sid8", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6490204, "sid": "sid9", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6490204, "sid": "sid10", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6500206, "sid": "sid11", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6530213, "sid": "sid12", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6530213, "sid": "sid13", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6530213, "sid": "sid14", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6530213, "sid": "sid15", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6540759, "sid": "sid16", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6540759, "sid": "sid17", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6540759, "sid": "sid18", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6550813, "sid": "sid19", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6550813, "sid": "sid20", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6550813, "sid": "sid21", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6560829, "sid": "sid22", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6560829, "sid": "sid23", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6570811, "sid": "sid24", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6570811, "sid": "sid25", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6570811, "sid": "sid26", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6570811, "sid": "sid27", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6570811, "sid": "sid28", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6580815, "sid": "sid29", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6580815, "sid": "sid30", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6580815, "sid": "sid31", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6580815, "sid": "sid32", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6590812, "sid": "sid33", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6590812, "sid": "sid34", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6590812, "sid": "sid35", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.660081, "sid": "sid36", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.660081, "sid": "sid37", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.660081, "sid": "sid38", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.660081, "sid": "sid39", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6610816, "sid": "sid40", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6610816, "sid": "sid41", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6610816, "sid": "sid42", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6620822, "sid": "sid43", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6620822, "sid": "sid44", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.663081, "sid": "sid45", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.663081, "sid": "sid46", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6640809, "sid": "sid47", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6650834, "sid": "sid48", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6650834, "sid": "sid49", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.666081, "sid": "sid50", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.666081, "sid": "sid51", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.666081, "sid": "sid52", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.666081, "sid": "sid53", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.667081, "sid": "sid54", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.667081, "sid": "sid55", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.667081, "sid": "sid56", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6680815, "sid": "sid57", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6680815, "sid": "sid58", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6680815, "sid": "sid59", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6690824, "sid": "sid60", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6690824, "sid": "sid61", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6690824, "sid": "sid62", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6700823, "sid": "sid63", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6700823, "sid": "sid64", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6700823, "sid": "sid65", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6700823, "sid": "sid66", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6710815, "sid": "sid67", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6710815, "sid": "sid68", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785031840.6710815, "sid": "sid69", "qid": null, "utterance": "some question here", "decision": "answered", "reason": "", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785036286.9476597, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "56e8729d3f00432fa114f431ffa6e332", "utterance": "How many different types of scalings are available", "decision": "answered", "reason": "speculative", "qtype": "technical_concept", "signals": {}}
+{"kind": "decision", "ts": 1785040416.4033675, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "d88000eac4e4481dadde3cf41f51e89a", "utterance": "What is Kafka?", "decision": "answered", "reason": "speculative", "qtype": "technical_concept", "signals": {}}
+{"kind": "decision", "ts": 1785040434.0142598, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "fcbe5b849a6b4f6fa63946ec24c81e81", "utterance": "(1) What is Kafka? (2) And what does Zoopkeeper do?", "decision": "answered", "reason": "", "qtype": "technical_concept", "signals": {}}
+{"kind": "decision", "ts": 1785040470.8686197, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "bcbbdb08924f43ed9d153dd7d47b702a", "utterance": "for high to good actually.", "decision": "skipped", "reason": "feedback", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785040480.5990708, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "c9300ff77a6a4fc48241d6f2b5355f90", "utterance": "Kafka is a distributed fault tolerance event stream platform built", "decision": "skipped", "reason": "explanation", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785040493.4665697, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "63d8cfd33452478c9d554fed0cb43195", "utterance": "So, you know, it will have low latency ingestion and replay of real time data stream So basically what it does is it Kafka is a distributed fault tolerance event stream platform built persists immutable append only logs called topics Merci.", "decision": "skipped", "reason": "explanation", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785040514.6656148, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "5da5e4270e8748b88d795a965a1797e6", "utterance": "So, you know, it will have low latency ingestion and replay of real time data stream So basically what it does is it Kafka is a distributed fault tolerance event stream platform built persists immutable append only logs called topics Merci it splits into ordered partitions and that are that I shared", "decision": "skipped", "reason": "small_talk", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785040517.9083862, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "90ec4006a26347dcbac1d26c8d6c56f3", "utterance": "that are shared across the clusters only.", "decision": "skipped", "reason": "small_talk", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785040570.0272079, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "ac3584c36eca4c2c924a0a13640d1023", "utterance": "Do you know how Kafka works?", "decision": "answered", "reason": "", "qtype": "technical_concept", "signals": {}}
+{"kind": "decision", "ts": 1785040573.3256218, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "30ec592c89c746aa86528be31bfc80f1", "utterance": "Kafka will have high throughput.", "decision": "skipped", "reason": "explanation", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785040611.8193426, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "969da17cb75b4beca3dd0f6c75952f7d", "utterance": "Basically I have built and operated Kafka based pipelines at scale so I can walk you through how it works.", "decision": "skipped", "reason": "small_talk", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785040623.9522684, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "f9aa8683bc934ce9b223e4dd45046e8a", "utterance": "în respectul de psihicătățile.", "decision": "skipped", "reason": "small_talk", "qtype": "", "signals": {}}
+{"kind": "decision", "ts": 1785040631.3225935, "sid": "bc6af8b5-406a-4c94-b978-5cf7392b9711", "qid": "59b3d8cc143f49eb8c722d6305721843", "utterance": "So basically what happens is that there are some", "decision": "skipped", "reason": "explanation", "qtype": "", "signals": {}}

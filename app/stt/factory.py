@@ -293,9 +293,12 @@ def resolve_device() -> tuple[str, str]:
         gpu_on = bool(getattr(cfg.live, "gpu_stt", False))
         if gpu_on and _cuda_available():
             ct = getattr(cfg.stt, "compute_type", "int8")
-            # int8 is a CPU compute type; prefer float16 on GPU.
-            if ct in ("int8", "int8_float16"):
-                ct = "float16"
+            # Plain int8 is CPU-only. On GPU prefer int8_float16 (mixed: int8
+            # weights + float16 compute) — as fast as float16 but ~half the VRAM
+            # (~1.5GB vs ~3GB for large-v3), which matters on an 8GB card shared
+            # with the vision model. An explicit float16 is honored unchanged.
+            if ct == "int8":
+                ct = "int8_float16"
             return "cuda", ct
         return getattr(cfg.stt, "device", "cpu"), getattr(cfg.stt, "compute_type", "int8")
     except Exception:  # noqa: BLE001

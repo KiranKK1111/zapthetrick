@@ -36,31 +36,43 @@ class STTError(RuntimeError):
 
 
 def _cuda_ready() -> bool:
-    """True when ORT has the CUDA provider AND the CUDA DLLs are locatable.
-    Torch's cu12x wheels bundle cudart/cublas/cudnn in torch/lib — register
-    that directory so onnxruntime-gpu can load them on Windows."""
+    """True when ORT has the CUDA provider AND its CUDA/cuDNN DLLs are locatable.
+
+    The CUDA EP loads cublasLt / cudnn as TRANSITIVE dependencies; on Windows a
+    dependency load is NOT covered by os.add_dll_directory, so those dirs must be
+    on PATH before the EP DLL loads. We point ORT at the `nvidia-*-cu12` pip
+    packages (which match the CUDA-12 onnxruntime-gpu build) — deliberately NOT
+    torch/lib, whose bundled cuDNN is a different ABI and makes the EP silently
+    fall back to CPU (observed: "cublasLt64_13.dll missing" / procedure-not-found
+    on cudnn). Requires onnxruntime-gpu built for CUDA 12 (see requirements)."""
     try:
         import onnxruntime as ort
         if "CUDAExecutionProvider" not in ort.get_available_providers():
             return False
-        # Resolve the CUDA/cuDNN DLLs the CUDA EP links against (ORT looks in
-        # the nvidia-* pip packages and torch). Without this the EP silently
-        # drops to CPU on Windows. Requires the ORT build's CUDA major to
-        # match the installed wheels (we ship the CUDA-12 ORT build to match
-        # torch cu12x + nvidia-*-cu12).
+        import os
+        # site-packages/onnxruntime/__init__.py -> site-packages
+        sp = os.path.dirname(os.path.dirname(ort.__file__))
+        nvidia_dirs = [
+            os.path.join(sp, "nvidia", pkg, "bin")
+            for pkg in ("cublas", "cudnn", "cuda_runtime", "cuda_nvrtc")
+        ]
+        existing = [d for d in nvidia_dirs if os.path.isdir(d)]
+        if existing:
+            os.environ["PATH"] = (os.pathsep.join(existing) + os.pathsep
+                                  + os.environ.get("PATH", ""))
+            for d in existing:
+                try:
+                    os.add_dll_directory(d)
+                except Exception:  # noqa: BLE001
+                    pass
         if hasattr(ort, "preload_dlls"):
-            # preload_dlls() print()s "Skip loading CUDA and cuDNN DLLs since
-            # torch is imported." to stdout when torch already loaded them
-            # (our case) — benign but noisy. Swallow just this call's stdout.
             import contextlib
             import io
             with contextlib.redirect_stdout(io.StringIO()):
-                ort.preload_dlls()
-        import os
-        import torch  # noqa: F401 — its import also preloads CUDA DLLs
-        torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
-        if os.path.isdir(torch_lib):
-            os.add_dll_directory(torch_lib)
+                try:
+                    ort.preload_dlls()
+                except Exception:  # noqa: BLE001 — best-effort; PATH already set
+                    pass
         return True
     except Exception:  # noqa: BLE001
         return False

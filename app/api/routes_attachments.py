@@ -125,13 +125,31 @@ async def _vision_extract(images: list[str], task: str) -> tuple[str, str, str]:
             # VLM (structure/understanding) + OCR (exact text) run CONCURRENTLY
             # — total latency is the slower of the two, not the sum. OCR reads
             # the dense code + the selected-language chip that a small VLM skips.
+            # Use the PRIMARY vision model only here (not the fallback chain): OCR
+            # is authoritative for this path, so a small VLM returning empty must
+            # NOT trigger a slow heavy-fallback (e.g. Qwen-VL-3B ~5GB) cold-load —
+            # that was the "reading image is slow" hang. The heavy model is used
+            # only as a last resort below, when BOTH OCR and the fast VLM are empty.
+            _primary = [str(getattr(cfg.vision, "provider", "") or "smolvlm_500m")]
             _vlm_res, _ocr_res = await asyncio.gather(
-                _vf.describe_images(images, _prompt),
+                _vf.describe_images(images, _prompt, providers=_primary),
                 _ocr.ocr_images(images),
                 return_exceptions=True,
             )
             local = (_vlm_res if isinstance(_vlm_res, str) else "").strip()
             ocr_text = (_ocr_res if isinstance(_ocr_res, str) else "").strip()
+            # Last resort: nothing legible from OCR AND the fast VLM — only NOW
+            # pay for the heavy fallback model (rare: a non-text image the small
+            # model can't read). Skipped whenever OCR or the fast VLM got text.
+            if not ocr_text and not local:
+                _fallbacks = list(getattr(cfg.vision, "fallback_providers", []) or [])
+                if _fallbacks:
+                    try:
+                        _fb = await _vf.describe_images(images, _prompt,
+                                                        providers=_fallbacks)
+                        local = (_fb or "").strip()
+                    except Exception:  # noqa: BLE001
+                        pass
         except Exception as exc:  # noqa: BLE001 — never break the turn over vision
             log.info("vision-extract: local vision layer error (%s)", exc)
         _vlm_ok = bool(local) and len(local) > 30 and not _VISION_REFUSAL_RE.search(local)

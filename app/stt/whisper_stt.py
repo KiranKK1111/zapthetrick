@@ -107,10 +107,54 @@ def _decode_kwargs() -> dict:
     }
 
 
+# English + the major Indian languages — the plausible set for this app. Whisper
+# auto-detect on a SHORT clip ("Hi") misfires to Japanese/Korean/Chinese; pinning
+# detection to this whitelist keeps a short English/Indian utterance from being
+# transcribed as a random unrelated language.
+_ALLOWED_LANGS_DEFAULT = ["en", "hi", "te", "ta", "kn", "ml", "bn", "mr", "gu",
+                          "pa", "ur", "or", "as"]
+
+
+def _resolve_language(model, audio_np) -> str | None:
+    """Pick the transcription language. An explicit `stt.language` wins. When it
+    is None (auto), detect the language but CONSTRAIN it to the allowed set so a
+    short English clip can't be read as Japanese — pick the highest-probability
+    language among the whitelist, with a mild English bias for ambiguous clips
+    (this app's speakers are mostly English + Indian languages)."""
+    pinned = getattr(cfg.stt, "language", None)
+    if pinned:
+        return pinned
+    allowed = list(getattr(cfg.stt, "allowed_languages", None)
+                   or _ALLOWED_LANGS_DEFAULT)
+    if not allowed:
+        return None  # truly unconstrained auto-detect
+    try:
+        _lang, _prob, all_probs = model.detect_language(audio_np)
+    except Exception:  # noqa: BLE001 — fall back to a safe default
+        return "en" if "en" in allowed else allowed[0]
+    probs = dict(all_probs or [])
+    best = max(allowed, key=lambda code: probs.get(code, 0.0))
+    # English bias ONLY for SHORT clips (< ~2s), where detection is noisy and a
+    # quick English "Hi" gets misread. For a real sentence — including genuine
+    # Hindi/Telugu or a code-switched mix — trust the whitelisted detection so
+    # it's transcribed in the RIGHT language/script (pinning English would
+    # garble it). Whisper still transcribes any in-utterance language mixing.
+    try:
+        duration_s = float(len(audio_np)) / 16000.0
+    except Exception:  # noqa: BLE001
+        duration_s = 99.0
+    if (duration_s < 2.0 and "en" in allowed
+            and probs.get("en", 0.0) >= probs.get(best, 0.0) - 0.15):
+        return "en"
+    return best
+
+
 def transcribe(audio_np) -> str:
     """Transcribe a 16-kHz float32 mono numpy array. Returns plain text."""
     model = _model()
-    segments, _info = model.transcribe(audio_np, **_decode_kwargs())
+    kwargs = _decode_kwargs()
+    kwargs["language"] = _resolve_language(model, audio_np)
+    segments, _info = model.transcribe(audio_np, **kwargs)
     return " ".join(s.text.strip() for s in segments if s.text.strip())
 
 

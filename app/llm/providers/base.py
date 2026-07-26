@@ -35,7 +35,7 @@ async def pooled_client():
 # verification: retrying the SAME provider is futile, but a DIFFERENT one may
 # well work, so we fall through (the engine cools the walled one down for a day
 # so it stops getting picked).
-RETRYABLE_STATUSES = {402, 403, 404, 408, 409, 413, 425, 429, 500, 502, 503, 504}
+RETRYABLE_STATUSES = {402, 403, 404, 408, 409, 410, 413, 425, 429, 500, 502, 503, 504}
 
 # Message fragments that mean "this model id is gone/invalid — stop using it".
 # Providers signal this inconsistently: OpenRouter returns 404 "No endpoints
@@ -46,9 +46,15 @@ _DEAD_MODEL_MARKERS = (
     "no endpoints found", "not a valid model", "is not a valid model",
     "model not found", "model_not_found", "does not exist", "unknown model",
     "no allowed providers",
+    # End-of-life / decommissioned model ids (e.g. NVIDIA NIM 410 "the model
+    # '…' has reached its end of life … and is no longer available"). These are
+    # permanently gone, so remove them from the catalog — never retry them.
+    "end of life", "end-of-life", "no longer available", "has been retired",
+    "has been decommissioned", "has been sunset", "has been removed",
     # NOTE: deliberately NOT the bare "not found" — it matched transient
     # gateway/CDN 404 bodies ("resource not found", "page not found") and
-    # permanently disabled healthy models. Keep only model-specific phrasings.
+    # permanently disabled healthy models. Nor the bare "deprecated" — many
+    # providers keep deprecated models fully usable. Keep only "gone" phrasings.
 )
 
 # Message fragments (beyond the dead-model ones) that warrant a retry on the
@@ -79,10 +85,11 @@ def classify_error(status: int | None, message: str | None) -> tuple[bool, bool]
     leaves the routing chain entirely (not just a temporary cooldown).
     """
     msg = (message or "").lower()
-    # A model is "permanently dead" ONLY when the message explicitly says the id
-    # is gone/invalid. A bare 404 (with no dead marker) is treated as retryable
-    # but NOT dead — a one-off gateway/CDN 404 must not disable a good model.
-    dead = any(k in msg for k in _DEAD_MODEL_MARKERS)
+    # A model is "permanently dead" when the message says the id is gone/invalid,
+    # OR the provider returned HTTP 410 Gone — which by definition means the
+    # resource is permanently gone (not a transient 404/CDN blip). Either way,
+    # remove it from the catalog so it never wastes another routing attempt.
+    dead = status == 410 or any(k in msg for k in _DEAD_MODEL_MARKERS)
     retryable = (
         dead
         or status is None  # transport error (timeout / connreset)

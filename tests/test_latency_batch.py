@@ -440,11 +440,16 @@ class TestSttRuntimeSwitch:
                             raising=False)
         assert factory._provider_chain() == ["faster_whisper"]
 
-    def test_no_cloud_dispatch_exists(self):
+    def test_local_chain_never_dispatches_cloud(self, monkeypatch):
+        # Cloud STT is now a first-class MODE (app.stt.cloud_stt — the "otherwise
+        # cloud" path). The invariant that still holds: a LOCAL provider chain is
+        # exactly the chosen local engine(s) — it never secretly folds in cloud.
+        from app.core.config_loader import cfg
         from app.stt import factory
         assert not hasattr(factory, "_async_providers")
-        import importlib.util
-        assert importlib.util.find_spec("app.stt.cloud_stt") is None
+        monkeypatch.setattr(cfg.stt, "provider", "parakeet", raising=False)
+        monkeypatch.setattr(cfg.stt, "fallback_providers", [], raising=False)
+        assert factory._provider_chain() == ["parakeet"]
 
     def test_unload_all_frees_engines(self, monkeypatch):
         from app.stt import factory, parakeet_stt, qwen_asr_stt, whisper_stt

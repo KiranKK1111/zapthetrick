@@ -120,9 +120,15 @@ def _decode(images_b64: Sequence[str]) -> list[bytes]:
     return out
 
 
-async def describe_images(images_b64: Sequence[str], prompt: str) -> str:
+async def describe_images(images_b64: Sequence[str], prompt: str,
+                          providers: list[str] | None = None) -> str:
     """Parse image(s) into a structured TEXT description using the LOCAL model
     chain. Base64 side-channel in (the `images:[…]` message shape), text out.
+
+    `providers` overrides the engine chain for this call (default: the configured
+    provider + fallbacks). The OCR-authoritative Solve path passes the PRIMARY
+    provider only, so a fast small VLM returning empty doesn't trigger a slow
+    heavy-fallback cold-load when OCR already has the text.
 
     Cached by (image bytes, prompt) so the same screenshot/document is parsed
     once. Returns "" if every engine failed (the caller then decides what to do
@@ -157,7 +163,8 @@ async def describe_images(images_b64: Sequence[str], prompt: str) -> str:
         log.info("vision: cloud model returned empty — falling back to local")
 
     last_err: Exception | None = None
-    for name in _provider_chain():
+    _chain = providers if providers is not None else _provider_chain()
+    for name in _chain:
         fn = _PROVIDERS.get(name)
         if fn is None:
             continue
