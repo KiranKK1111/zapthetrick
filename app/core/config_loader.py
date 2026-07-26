@@ -61,6 +61,22 @@ class EngineRoutingSection(BaseModel):
     first_token_deadline_s: float = 7.0
 
 
+class LocalLLMSection(BaseModel):
+    """On-pod local generation floor (§2.1 T4): a llama.cpp OpenAI-compatible
+    server the router treats as an always-available, rate-limit-free route (and
+    the fast fallback a stalled free cloud model fails over to). Off on the
+    desktop build; the RunPod entrypoint turns it on when LOCAL_LLM_ENABLED=1.
+
+    This MUST be declared as a real field — with Pydantic's default
+    `extra='ignore'`, a rendered `llm.local:` block on a model that lacks the
+    field is silently dropped at load, so `local_enabled()` (app/llm/catalog.py)
+    would always read False and the floor would never seed/route. Declaring it
+    is what makes GPU-local generation actually activate on the pod."""
+    enabled: bool = False
+    model_id: str = "qwen3-4b-instruct"
+    base_url: str = "http://127.0.0.1:8081/v1"
+
+
 class LLMSection(BaseModel):
     """LLM provider + model selection.
 
@@ -109,6 +125,11 @@ class LLMSection(BaseModel):
     # answers) instead of the terse real-time one. Length is still bounded by
     # live_max_tokens / forced_depth, but structure + depth match chat.
     live_detailed: bool = True
+
+    # On-pod local generation floor (§2.1 T4). Off on desktop; the RunPod
+    # entrypoint turns it on (LOCAL_LLM_ENABLED=1). Declared so the rendered
+    # `llm.local:` block is honored instead of silently dropped on load.
+    local: LocalLLMSection = Field(default_factory=LocalLLMSection)
 
     # Ollama-specific endpoint. Used only when provider == "ollama".
     base_url: str = "http://localhost:11434"

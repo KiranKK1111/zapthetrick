@@ -25,16 +25,21 @@ BACKUP_INTERVAL_S="${BACKUP_INTERVAL_S:-1800}"    # 30 min
 export HF_HOME="${HF_HOME:-/workspace/hf_cache}"
 export ZAPTHETRICK_CONFIG_PATH="$CFG"
 export BACKUP_DIR
-# ---- local generation floor (§2.1 T4) — OPT-IN (default OFF) -----------------
-# Set LOCAL_LLM_ENABLED=1 to run an on-pod llama.cpp OpenAI server so the router
-# ALWAYS has a route (never-empty). Default off → the current deploy is unchanged.
-LOCAL_LLM_ENABLED="${LOCAL_LLM_ENABLED:-0}"
+# ---- local generation floor (§2.1 T4) — ON by default (GPU generation) -------
+# Runs an on-pod llama.cpp OpenAI server (CUDA-built → runs on the GPU) so the
+# router ALWAYS has an instant, rate-limit-free route. Default ON: it's the
+# answer to "generate on the 24GB GPU" and the fast floor a stalled free cloud
+# model fails over to. Set LOCAL_LLM_ENABLED=0 to go cloud-only.
+LOCAL_LLM_ENABLED="${LOCAL_LLM_ENABLED:-1}"
 LOCAL_LLM_PORT="${LOCAL_LLM_PORT:-8081}"
-LOCAL_LLM_MODEL_ID="${LOCAL_LLM_MODEL_ID:-qwen3-4b-instruct}"
+LOCAL_LLM_MODEL_ID="${LOCAL_LLM_MODEL_ID:-qwen2.5-14b-instruct}"
 LOCAL_LLM_GGUF="${LOCAL_LLM_GGUF:-/workspace/models/local-llm.gguf}"
-# A Qwen small-instruct GGUF (Q4_K_M). Override with any llama.cpp-compatible
-# GGUF URL. Default is a widely-mirrored 3B; swap for a 4B when you prefer.
-LOCAL_LLM_GGUF_URL="${LOCAL_LLM_GGUF_URL:-https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf}"
+# Qwen2.5-14B-Instruct Q4_K_M (~9GB) — the quality/latency sweet spot for a 24GB
+# card shared with STT (~3GB) + local vision (~1-7GB). Single-file GGUF (reliable,
+# no shard-merge). Override LOCAL_LLM_GGUF_URL for a smaller/faster model (e.g. the
+# 7B) on a smaller GPU, or a 32B on a bigger one. A download failure degrades
+# gracefully — the floor stays inert and answers fall back to cloud.
+LOCAL_LLM_GGUF_URL="${LOCAL_LLM_GGUF_URL:-https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf}"
 PGBIN="$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)"
 mkdir -p /workspace "$HF_HOME" "$BACKUP_DIR"
 

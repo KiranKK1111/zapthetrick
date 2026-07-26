@@ -18,7 +18,7 @@ llm:
   live_model: llama-3.3-70b-versatile
   effort_dial: false
   live_max_tokens: 4000
-  live_first_token_timeout: 20.0
+  live_first_token_timeout: 10.0
   live_detailed: true
   base_url: http://localhost:11434
   openrouter_api_key: ''
@@ -87,13 +87,18 @@ vision:
   vision_latency_weight: 0.2
   code_prompt: 'This is a screenshot of a coding site or IDE (e.g. LeetCode, HackerRank, VS Code). Your reply MUST BEGIN with one line exactly: ''Language: <name>''. Determine <name> by reading the editor''s LANGUAGE SELECTOR — a small dropdown/label at the TOP of the code editor panel (often top-left or top-right, shown next to a small chevron ''⌄'', lock, or ''Auto'', e.g. ''Swift'', ''Java'', ''Python3'', ''C++'', ''Dart'', ''Go''). Read that chip EXACTLY — do NOT guess and do NOT assume Python. Look carefully even if the chip is small. If no selector is visible at all, infer the language from the starter-code syntax and the file extension and name your best reading. After that first line, transcribe ONLY the coding problem and its code editor — the problem statement, the examples/constraints, and the code stub verbatim (preserve the exact class/method names, types and signature). IGNORE everything unrelated: the desktop, taskbar, browser tabs/chrome, other windows, menus, and side panels — do not describe them. Be concise: no commentary. Do NOT write, complete, translate, fix, or invent any code, and do NOT solve the problem — only transcribe the problem and its starter code.'
   cloud_difficulty: trivial
-  provider: smolvlm_500m
+  # 24GB pod: the CAPABLE model reads languages/code accurately on its own, so
+  # it's primary (small SmolVLM-500M kept only as a light fallback). This is the
+  # fix for the "Dart screenshot solved as C#" class of bug in local mode.
+  provider: qwen2_5_vl
   fallback_providers:
-  - qwen2_5_vl
+  - smolvlm_500m
   smolvlm_small_model: HuggingFaceTB/SmolVLM-500M-Instruct
   smolvlm_model: HuggingFaceTB/SmolVLM-Instruct
   qwen_vl_model: Qwen/Qwen2.5-VL-3B-Instruct
-  qwen_vl_load_8bit: false
+  # 8-bit load (~3.5GB vs ~7GB fp16) so the 3B VLM COEXISTS on 24GB with the
+  # 14B local LLM (~10GB) + Whisper large-v3 (~3GB) — ~17GB total, safe headroom.
+  qwen_vl_load_8bit: true
   minicpm_model: openbmb/MiniCPM-V-2_6
   use_gpu: true
   max_new_tokens: 512
