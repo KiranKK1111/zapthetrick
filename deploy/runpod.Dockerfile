@@ -71,17 +71,23 @@ RUN python3 -m venv "$VENV" \
   && "$VENV/bin/pip" install --no-cache-dir -r /tmp/req.txt \
   # 8-bit quantization for the 7B VLM (GPU-only; kept out of requirements.txt so
   # the CPU/Windows desktop build isn't forced to install a CUDA wheel).
-  && "$VENV/bin/pip" install --no-cache-dir bitsandbytes \
-  # Local generation floor (§2.1 T4): llama.cpp OpenAI-compatible server, run on
-  # 127.0.0.1 when LOCAL_LLM_ENABLED=1. Built with CUDA (-DGGML_CUDA=on) so the
-  # model's layers run on the pod's GPU — the whole point of "generate on the
-  # 24GB GPU". This is why the base image is the CUDA *devel* variant (it carries
-  # nvcc). `all-major` targets every major compute arch (+PTX for forward-compat
-  # so newer GPUs like Blackwell JIT), so one build runs on any RunPod GPU. The
-  # app never imports llama_cpp — it talks to this server over HTTP — so a CUDA
-  # build here can't affect the rest of the app.
-  && CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=all-major" \
-       "$VENV/bin/pip" install --no-cache-dir "llama-cpp-python[server]"
+  && "$VENV/bin/pip" install --no-cache-dir bitsandbytes
+
+# 5b) Local generation floor (§2.1 T4): llama.cpp OpenAI-compatible server, run on
+#     127.0.0.1 when LOCAL_LLM_ENABLED=1. Built with CUDA (-DGGML_CUDA=on) so the
+#     model's layers run on the pod's GPU — the whole point of "generate on the
+#     24GB GPU" — which is why the base image is the CUDA *devel* variant (nvcc).
+#     ISOLATED in its own layer: the CUDA compile is slow, so keeping it off the
+#     deps layer means a requirements/code change never triggers a recompile.
+#     ARCH = sm_80 ONLY (compiles ~5x faster than all-major). By CUDA's binary-
+#     compat rule a cubin for 8.0 runs on any 8.x device, so ONE build covers
+#     every Ampere+Ada RunPod GPU: A100 (8.0), A40/A6000/3090 (8.6), and the
+#     L4/L40S/4090 (8.9) this pod uses. (For Hopper/Blackwell, add 90/120.)
+#     CMAKE_BUILD_PARALLEL_LEVEL uses all CI cores. The app never imports
+#     llama_cpp — it talks to this server over HTTP — so this can't affect the app.
+RUN CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=80" \
+    CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
+    "$VENV/bin/pip" install --no-cache-dir "llama-cpp-python[server]"
 
 # 6) Bake the app CODE into the image (self-contained — no git clone at boot,
 #    no REPO_URL). Copied LAST so a code change doesn't bust the deps layer.
