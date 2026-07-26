@@ -204,10 +204,23 @@ def authenticate_ws(token: str | None, *, jwks=None
     error)``. Not enforced → always allowed; a token present is still verified so
     the connection is scoped to that user, but a bad token degrades to anonymous.
     Enforced → a valid token is required (else a typed error to close the socket)."""
+    # Mirror the HTTP gate (authorize): when NO auth plane is configured the WS is
+    # a pass-through exactly like the HTTP middleware. Without this, a present dev
+    # token (e.g. the FE's unsignable `local.<b64>` token the pod can't verify)
+    # would fail verification below and the handler closes the socket BEFORE
+    # accept() → Starlette answers the handshake with HTTP 403 → the Dart client
+    # reports "was not upgraded to websocket". HTTP works in the same state only
+    # because authorize() short-circuits on `not auth_active()` and never looks at
+    # the token — this makes WS behave identically.
+    if not auth_active():
+        return None, None
     enforced = auth_enforced()
     if token:
-        # A present token is always verified (see authorize()): a bad token must
-        # not silently scope the socket to the anonymous device user.
+        # A present token is always verified (see authorize()): with an auth plane
+        # active, a bad token must not silently scope the socket to the anonymous
+        # device user (that hides "signed in but seeing the wrong data"). Rejection
+        # here only happens when auth IS active — the pod's no-auth-plane case
+        # already returned above, so its dev token never reaches this branch.
         try:
             claims = verify_any_token(token, jwks=jwks)
             auth_jwt.enforce_email_verified(claims)
