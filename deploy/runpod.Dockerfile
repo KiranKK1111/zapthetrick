@@ -85,7 +85,14 @@ RUN python3 -m venv "$VENV" \
 #     L4/L40S/4090 (8.9) this pod uses. (For Hopper/Blackwell, add 90/120.)
 #     CMAKE_BUILD_PARALLEL_LEVEL uses all CI cores. The app never imports
 #     llama_cpp — it talks to this server over HTTP — so this can't affect the app.
-RUN CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=80" \
+#
+#     GGML_NATIVE=OFF is CRITICAL: llama.cpp defaults to -march=native, which bakes
+#     the GITHUB RUNNER's CPU instruction set (incl. AVX-512) into the binary. The
+#     RunPod pod's CPU lacks those → the server dies instantly with SIGILL (illegal
+#     instruction) in a crash loop. So we disable native and pin a portable modern
+#     baseline (AVX2/FMA/F16C — universal on datacenter CPUs). CPU SIMD barely
+#     matters anyway since every layer is offloaded to the GPU (n_gpu_layers -1).
+RUN CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=80 -DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON" \
     CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)" \
     "$VENV/bin/pip" install --no-cache-dir "llama-cpp-python[server]"
 
