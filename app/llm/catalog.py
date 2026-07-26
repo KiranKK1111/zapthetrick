@@ -664,6 +664,37 @@ async def reseed_keyed_providers() -> int:
     return total
 
 
+async def reclaim_orphan_catalog(user_id) -> int:
+    """Re-home catalog rows stranded under ``user_id = NULL`` — models/keys/
+    fallbacks seeded before the user was resolved (the pre-fix bug: seed ran with
+    no request user, so the device-user reads showed 0). Assigns them to
+    `user_id`. SINGLE-USER / auth-off ONLY — the caller gates on `not
+    auth_enforced()`, since in multi-user mode NULL rows have no obvious owner.
+    Returns the number of rows moved. Best-effort; never raises."""
+    if user_id is None:
+        return 0
+    from sqlalchemy import update
+
+    from storage.db import get_session_factory
+    from storage.models import LLMApiKey, LLMFallbackConfig, LLMModel
+
+    factory = get_session_factory()
+    if factory is None:
+        return 0
+    moved = 0
+    try:
+        async with factory() as session:
+            for model in (LLMModel, LLMApiKey, LLMFallbackConfig):
+                res = await session.execute(
+                    update(model).where(model.user_id.is_(None))
+                    .values(user_id=user_id))
+                moved += int(res.rowcount or 0)
+            await session.commit()
+    except Exception:  # noqa: BLE001 — reclaim must never block startup
+        return moved
+    return moved
+
+
 async def prune_unknown_providers() -> int:
     """Delete DB rows (models, keys; fallback cascades) for any platform no
     longer in the catalogue — so a removed provider (e.g. Zhipu) fully

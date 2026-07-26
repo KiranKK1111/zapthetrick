@@ -442,8 +442,12 @@ async def voice_ws(
     if _err is not None:
         await websocket.close(code=1008)  # policy violation
         return
-    if _uid:
-        current_user_id_var.set(str(_uid))
+    # Bind the DEVICE user in auth-off mode (not None) so WS-path scoping matches
+    # HTTP + resolve_user_id() — otherwise router/cache/catalog run under NULL.
+    from app.api.auth import ws_user_id
+    _bound = await ws_user_id(_uid)
+    if _bound:
+        current_user_id_var.set(_bound)
     await websocket.accept()
 
     _send_lock = asyncio.Lock()
@@ -535,10 +539,13 @@ async def live_listen(
     if _ws_err is not None:
         await websocket.close(code=1008)  # policy violation
         return
-    if _ws_uid:
-        # Set for THIS task; contextvars propagate to spawned tasks, and the
-        # copy is discarded when the connection task ends (no reset needed).
-        current_user_id_var.set(str(_ws_uid))
+    # Set for THIS task; contextvars propagate to spawned tasks, and the copy is
+    # discarded when the connection task ends (no reset needed). Bind the DEVICE
+    # user in auth-off mode (not None) so WS scoping matches HTTP.
+    from app.api.auth import ws_user_id
+    _ws_bound = await ws_user_id(_ws_uid)
+    if _ws_bound:
+        current_user_id_var.set(_ws_bound)
 
     await websocket.accept()
     sid = session_id or str(uuid.uuid4())

@@ -169,11 +169,18 @@ async def add_key(platform: str, body: dict) -> dict:
     discovered = {"discovered": 0, "added": 0}
     if decision["fill_catalog"]:
         try:
+            from app.api.auth import resolve_user_id
             from app.llm.catalog import seed_provider
             from app.llm.discovery import discover_models
 
-            await seed_provider(platform)
-            discovered = await discover_models(platform, api_key=key.strip())
+            # Resolve the user EXACTLY as the provider-list read does
+            # (resolve_user_id → device user when auth is off, JWT sub when on),
+            # and seed/discover UNDER that user — otherwise the catalog lands
+            # under user_id=NULL and the list (device user) shows 0 models.
+            _uid = await resolve_user_id()
+            await seed_provider(platform, user_id=_uid)
+            discovered = await discover_models(
+                platform, api_key=key.strip(), user_id=_uid)
         except Exception as exc:  # noqa: BLE001
             log.info("seed/discovery after key add failed for %s: %s", platform, exc)
     else:
@@ -455,11 +462,13 @@ async def refresh_models(platform: str) -> dict:
     """Augment the catalog with models discovered live from the provider's
     /models endpoint. New ids are added (disabled by default so they don't
     silently enter routing); known ids are left untouched."""
+    from app.api.auth import resolve_user_id
     from app.llm.discovery import discover_models
 
     if get_provider_spec(platform) is None:
         raise HTTPException(404, detail=f"Unknown provider '{platform}'.")
-    result = await discover_models(platform)
+    # Discover UNDER the same user the list reads (device user when auth off).
+    result = await discover_models(platform, user_id=await resolve_user_id())
     if result.get("error") and result.get("discovered", 0) == 0 and result.get("added", 0) == 0:
         raise HTTPException(400, detail=result["error"])
     return result

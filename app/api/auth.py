@@ -124,6 +124,35 @@ def authorize(path: str, auth_header: str | None, *, jwks=None
     return auth_jwt.user_id_from_claims(claims), None
 
 
+_device_user_cache = None
+
+
+async def _cached_device_user():
+    """The device user's UUID, resolved once and cached (the device install id is
+    stable per deploy, so this is a one-time DB lookup). Used by the middleware to
+    bind a real user in auth-off mode. Returns None on any failure (fail-open)."""
+    global _device_user_cache
+    if _device_user_cache is None:
+        try:
+            from storage.device import ensure_device_user
+            _device_user_cache = await ensure_device_user()
+        except Exception:  # noqa: BLE001 — never break the request over this
+            return None
+    return _device_user_cache
+
+
+async def ws_user_id(uid) -> str | None:
+    """The user id a WebSocket should bind into its context: the authenticated
+    uid, or the DEVICE user in auth-off mode — so WS-path scoping (router/cache/
+    catalog) matches HTTP and `resolve_user_id()` instead of running under None."""
+    if uid:
+        return str(uid)
+    if not auth_enforced():
+        dev = await _cached_device_user()
+        return str(dev) if dev else None
+    return None
+
+
 class AuthMiddleware:
     """Pure ASGI auth gate. ``jwks`` overridable for tests."""
 
@@ -150,6 +179,17 @@ class AuthMiddleware:
                 status_code=error["status"])
             await resp(scope, receive, send)
             return
+        # Bind a user for the WHOLE request. When there's no authenticated user
+        # (auth off / anonymous / device mode), fall back to the DEVICE user —
+        # NOT None — so every scoped path (`get_request_user_id()` in catalog,
+        # keys, discovery, cache, router) agrees with `resolve_user_id()`.
+        # Leaving it None strands writes under user_id=NULL while reads look under
+        # the device user → "keys healthy but 0 models". Enforced mode never
+        # reaches here with user_id=None (authorize returns a 401 above).
+        if user_id is None and not auth_enforced():
+            _dev = await _cached_device_user()
+            if _dev is not None:
+                user_id = str(_dev)
         token = _current_user_id.set(user_id)
         try:
             await self.app(scope, receive, send)

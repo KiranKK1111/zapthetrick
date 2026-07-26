@@ -182,6 +182,20 @@ async def _bootstrap_llm_routing(migration_task: "asyncio.Task") -> None:
         added = await reseed_keyed_providers()
         if added:
             log.info("llm routing: seeded %d new curated free models", added)
+        # Re-home any catalog rows stranded under user_id=NULL (the pre-fix seed
+        # bug where seed ran with no request user → device-user reads showed 0).
+        # Auth-off / single-user only; on the pod this fixes an existing deploy
+        # without the user re-adding keys.
+        try:
+            from app.api.auth import auth_enforced, resolve_user_id
+            if not auth_enforced():
+                from app.llm.catalog import reclaim_orphan_catalog
+                _moved = await reclaim_orphan_catalog(await resolve_user_id())
+                if _moved:
+                    log.info("llm routing: reclaimed %d orphan (NULL-user) "
+                             "catalog rows to the device user", _moved)
+        except Exception:  # noqa: BLE001 — reclaim must never block startup
+            log.debug("orphan-catalog reclaim skipped", exc_info=True)
         # Seed the on-pod local model floor (§2.1 T4) when enabled — an
         # always-available route that makes the never-empty ladder structural.
         try:

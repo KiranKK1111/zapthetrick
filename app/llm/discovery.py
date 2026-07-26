@@ -128,7 +128,8 @@ async def fetch_model_ids(platform: str, api_key: str | None = None) -> set[str]
     return ids
 
 
-async def discover_models(platform: str, api_key: str | None = None) -> dict:
+async def discover_models(platform: str, api_key: str | None = None,
+                          user_id=None) -> dict:
     """Fetch `platform`'s /models and add any new ones (disabled).
 
     Returns {discovered, added, error?}. Never raises for ordinary failures
@@ -193,12 +194,18 @@ async def discover_models(platform: str, api_key: str | None = None) -> dict:
 
     from app.llm.catalog import detect_vision, rank_from_id
 
-    # Discovered models are added to the CURRENT user's catalog (§10.1c).
-    try:
-        from storage.context import get_request_user_id
-        uid = get_request_user_id()
-    except Exception:  # noqa: BLE001
-        uid = None
+    # Discovered models are added to the CURRENT user's catalog (§10.1c). The
+    # caller passes the SAME resolver the provider-list read uses (resolve_user_id
+    # → device user when auth is off), so seed and read agree on the user_id —
+    # otherwise seeds land under NULL and the list (device user) shows 0.
+    if user_id is not None:
+        uid = user_id
+    else:
+        try:
+            from storage.context import get_request_user_id
+            uid = get_request_user_id()
+        except Exception:  # noqa: BLE001
+            uid = None
 
     added = 0
     async with factory() as session:
