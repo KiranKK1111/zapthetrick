@@ -560,6 +560,15 @@ LIVE_STRATEGY_DEBUG_CUES = ("debug", "not working", "throwing an error", "fails"
                "what's wrong", "fix this")
 # Definition-strategy concept prefixes (question head words).
 LIVE_STRATEGY_CONCEPT_PREFIXES = ("what is", "what are", "explain", "define")
+# Estimation / back-of-the-envelope quantitative questions (B5). Fast-path cues
+# only (a scaffold hint, not a hard gate) — "how many servers", "estimate the
+# QPS", "roughly how much storage", "orders of magnitude".
+LIVE_STRATEGY_ESTIMATION_CUES = (
+    "how many", "how much", "estimate", "back of the envelope",
+    "back-of-the-envelope", "ballpark", "orders of magnitude", "roughly how",
+    "approximately how", "requests per second", "queries per second", " qps",
+    "throughput", "how large", "how big", "capacity of", "rough number",
+)
 
 # --- live/rhetorical.py — rhetorical-question disambiguation --------------
 # High-confidence rhetorical tags (the whole utterance, roughly).

@@ -57,12 +57,22 @@ def detect_implicit(utterance: str) -> ImplicitSignal:
             return sig
         for cue in _IMPERATIVE_CUES:
             if cue in t:
+                # The cue lists match SUBSTRINGS, so the speaker holding the
+                # floor trips them: "give me one moment" hits "give me",
+                # "I want to describe the format" hits "describe". Answering
+                # there talks OVER the interviewer. A semantic veto separates
+                # direction (asking the listener to talk vs offering to talk)
+                # in a way no literal list can. Fail-open → cue wins, as before.
+                if holds_floor(t):
+                    return sig
                 sig.is_implicit_question = True
                 sig.cue = cue
                 sig.confidence = 0.75
                 return sig
         for cue in _TRAILING_CUES:
             if t.endswith(cue):
+                if holds_floor(t):
+                    return sig
                 sig.is_implicit_question = True
                 sig.cue = cue
                 sig.confidence = 0.55
@@ -73,6 +83,18 @@ def detect_implicit(utterance: str) -> ImplicitSignal:
         return _semantic_signal("implicit_request", t) or sig
     except Exception:  # noqa: BLE001
         return sig
+
+
+def holds_floor(t: str) -> bool:
+    """True when the utterance semantically reads as the SPEAKER taking/holding
+    the floor (self-introduction, agenda, logistics, thinking aloud) rather than
+    asking the listener to speak. Vetoes a literal cue match. Fail-open → False
+    when the embedder is unavailable, so cue behaviour is unchanged."""
+    try:
+        from app.semantics import gates as _gates
+        return _gates.matches("speaker_holds_floor", t) is True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _semantic_signal(gate: str, t: str) -> ImplicitSignal | None:
@@ -124,7 +146,12 @@ def detect_hypothetical(utterance: str) -> ImplicitSignal:
             sig.cue = cue
             sig.confidence = 0.8 if idx == 0 else 0.65
             return sig
-        # Semantic tail — scenario probes phrased without any cue word.
+        # Semantic tail — scenario probes phrased without any cue word. The
+        # floor veto applies here too: "give me one moment, my screen froze"
+        # reads as a mini-scenario to the embedder, but the speaker is handling
+        # their own problem, not posing one to the candidate.
+        if holds_floor(t):
+            return sig
         return _semantic_signal("hypothetical_scenario", t) or sig
     except Exception:  # noqa: BLE001
         return sig

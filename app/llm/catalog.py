@@ -605,29 +605,40 @@ async def seed_local_provider() -> int:
         return 0
     mid = local_model_id()
     async with factory() as session:
-        existing = (
-            await session.execute(
+        async def _seed_one(model_id: str, intel: int, speed: int,
+                            priority: int) -> None:
+            row = (await session.execute(
                 select(LLMModel).where(LLMModel.platform == "local",
-                                       LLMModel.model_id == mid)
-            )
-        ).scalar_one_or_none()
-        if existing is None:
-            existing = LLMModel(
-                platform="local", model_id=mid, display_name=f"Local · {mid}",
-                intelligence_rank=60, speed_rank=8, enabled=True,
-                supports_vision=False, context_window=32768,
-            )
-            session.add(existing)
-            await session.flush()  # assign id
-        cfg_row = (
-            await session.execute(
+                                       LLMModel.model_id == model_id))
+            ).scalar_one_or_none()
+            if row is None:
+                row = LLMModel(
+                    platform="local", model_id=model_id,
+                    display_name=f"Local · {model_id}",
+                    intelligence_rank=intel, speed_rank=speed, enabled=True,
+                    supports_vision=False, context_window=32768,
+                )
+                session.add(row)
+                await session.flush()
+            cfg_row = (await session.execute(
                 select(LLMFallbackConfig).where(
-                    LLMFallbackConfig.model_db_id == existing.id)
-            )
-        ).scalar_one_or_none()
-        if cfg_row is None:
-            session.add(LLMFallbackConfig(model_db_id=existing.id,
-                                          priority=9999, enabled=True))
+                    LLMFallbackConfig.model_db_id == row.id))
+            ).scalar_one_or_none()
+            if cfg_row is None:
+                session.add(LLMFallbackConfig(model_db_id=row.id,
+                                              priority=priority, enabled=True))
+
+        # T4 floor: the big local model — strong (low speed_rank), weak-vs-cloud.
+        await _seed_one(mid, intel=60, speed=8, priority=9999)
+        # A4 two-tier: an optional SMALLER local model, seeded FASTER (high
+        # speed_rank) + weaker so the latency-aware / difficulty router prefers it
+        # for trivial/definition questions and reserves the big model for hard
+        # ones. Both are served by the same llama.cpp server (one base_url,
+        # switched by model_id). Empty small_model_id → single-tier (unchanged).
+        small = (getattr(getattr(cfg.llm, "local", None), "small_model_id", "")
+                 or "").strip()
+        if small and small != mid:
+            await _seed_one(small, intel=30, speed=20, priority=9998)
         await session.commit()
         return 1
 

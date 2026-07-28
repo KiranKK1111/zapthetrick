@@ -14,6 +14,23 @@ from app.documents import intent as I
 from app.documents.intent import ArtifactIntent as AI
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_taxonomy(monkeypatch):
+    """This file asserts the DETERMINISTIC, explicit-only taxonomy (see the
+    module docstring). `detect._semantic_doc_request` consults embedding gates
+    when an embedder is loaded, and those legitimately resolve fuzzier phrasings
+    ("create documentation for this") to an artifact intent — so the assertions
+    below flipped depending on whether an EARLIER test in the session happened to
+    warm the embedder. Pin the deterministic path so this file is order-
+    independent and measures what it claims. (The semantic path is exercised by
+    the document-intent gate tests; and per routes_agents.py, this classifier is
+    observability only — triage, not this verdict, decides whether a file is
+    generated.)"""
+    from app.semantics import gates
+    monkeypatch.setattr(gates, "_enabled", lambda: False)
+    yield
+
+
 @pytest.fixture
 def engine_on(monkeypatch):
     from app.core.config_loader import cfg

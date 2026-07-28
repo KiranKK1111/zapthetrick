@@ -67,7 +67,11 @@ def completeness(text: str) -> str:
     dangling = bool(words) and (
         last in _TRAILING_INCOMPLETE
         or last in _TRAILING_EXPECTS_OBJECT
-        or (last in {"me", "us", "you"}
+        # A bare pronoun straight after an opener/auxiliary still expects the
+        # predicate: "how do I …", "so tell me …", "why would we …". Without the
+        # SUBJECT pronouns here, "how do i" read as COMPLETE — endpointing early
+        # and chopping "how do I <pause> center a div" mid-question.
+        or (last in {"me", "us", "you", "i", "we", "they", "he", "she", "it"}
             and prev in _EXPECTS_OBJECT_BEFORE_PRONOUN)
     )
     # A terminal question/point mark usually means the thought closed — but
@@ -87,6 +91,18 @@ def completeness(text: str) -> str:
     # A closed declarative/interrogative with enough words reads as complete.
     if t[-1] == "." and len(words) >= 3:
         return "complete"
+    # Interrogative-LEAD completion: a finished question the ASR left un-'?'-ed.
+    # (Reached only when the tail is NOT dangling and has no terminal mark, so a
+    # real object is present — "tell me about your project", "what is REST".)
+    # An INTERIOR terminator means this is several utterances merged — the
+    # speaker drip-fed fragments ("Can you tell me?" + "various stereotype
+    # annotations"). The opening interrogative no longer governs the trailing
+    # fragment, so the lead alone must not declare the whole thing finished;
+    # fall through to neutral and keep the wider merge window.
+    interior_break = any(ch in "?!." for ch in t[:-1])
+    lead = next((w for w in words if w not in _LEAD_FILLERS), "")
+    if not interior_break and lead in _QUESTION_LEAD and len(words) >= 3:
+        return "complete"
     return "neutral"
 
 
@@ -103,6 +119,27 @@ _TRAILING_EXPECTS_OBJECT = {
 _EXPECTS_OBJECT_BEFORE_PRONOUN = {
     "would", "could", "will", "can", "should", "do", "does", "did", "tell",
     "give", "show", "walk", "let", "help", "ask", "have", "get",
+}
+
+# Utterances that BEGIN like a question — an imperative ask, a wh-word, or an
+# interrogative auxiliary — are COMPLETE questions even when the ASR dropped the
+# terminal '?' ("tell me about your project", "what is polymorphism", "how does
+# kafka handle ordering"). Classifying these as complete (not neutral) lets the
+# segmenter endpoint AND the settle timer fire fast on the very common no-'?'
+# question — the report's "semantic completion / non-question that still needs an
+# answer" case. Leading fillers ("so", "okay", "and") are skipped first. This
+# only speeds endpointing (answer-worthiness is still decided downstream), so a
+# borderline match costs a slightly early endpoint, never a wrong answer.
+_QUESTION_LEAD = {
+    "tell", "explain", "describe", "walk", "give", "discuss", "define",
+    "list", "outline", "summarize", "summarise", "show", "compare", "elaborate",
+    "what", "why", "how", "when", "where", "who", "whom", "whose", "which",
+    "can", "could", "would", "should", "do", "does", "did", "is", "are",
+    "was", "were", "have", "has", "will", "shall",
+}
+_LEAD_FILLERS = {
+    "so", "okay", "ok", "now", "alright", "right", "well", "um", "uh",
+    "and", "but", "also", "yeah", "yes", "hmm", "hey", "listen",
 }
 
 
@@ -158,6 +195,14 @@ class HypothesisBuffer:
         if base <= 0:
             return 0
         kind = completeness(self.merged())
+        # DRIP-FEED evidence outranks how finished the text looks. A hypothesis
+        # built from SEVERAL fragments means this speaker already paused
+        # mid-question at least once ("Can you tell me?" … "various stereotype
+        # annotations"), so they are likely to do it again — committing the
+        # instant the merged text happens to read complete is what chops such a
+        # question in half. Keep the merge window open for the next piece.
+        if len(self._parts) > 1 and kind != "incomplete":
+            return min(2600, base * 2)
         if kind == "complete":
             if self._audio_present:
                 return 0

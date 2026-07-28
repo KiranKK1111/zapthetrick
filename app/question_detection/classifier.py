@@ -55,10 +55,23 @@ def heuristic_classify(text: str) -> QuestionMeta:
     if len(t) < cfg.question_detection.min_question_length:
         return QuestionMeta(False, "unknown", False, "", 0.1, "heuristic")
 
-    is_question = (
-        t.endswith("?")
-        or any(t.startswith(w + " ") or t.startswith(w + "'") for w in _INTERROGATIVES)
-    )
+    by_mark = t.endswith("?")
+    by_prefix = any(t.startswith(w + " ") or t.startswith(w + "'")
+                    for w in _INTERROGATIVES)
+    is_question = by_mark or by_prefix
+    # `_INTERROGATIVES` holds imperative openers too ("give me", "tell me"), so
+    # the speaker handling their OWN business trips them: "give me one moment,
+    # my screen froze" is not a question. Veto semantically — a literal list
+    # cannot separate "give me one moment" from "give me an example". Only
+    # consulted for a PREFIX match with no '?' (a minority of utterances), so
+    # the hot path is unaffected; fail-open ⇒ today's behaviour.
+    if by_prefix and not by_mark:
+        try:
+            from app.live.implicit import holds_floor
+            if holds_floor(t):
+                is_question = False
+        except Exception:  # noqa: BLE001 — heuristic must never raise
+            pass
     # Indirect and hypothetical probes read as statements syntactically but
     # demand an answer: "I'd like to hear about your project", "Suppose one
     # service goes down." The live decision engine promotes these too; the
@@ -90,7 +103,19 @@ def heuristic_classify(text: str) -> QuestionMeta:
     is_followup = is_question and any(
         t.startswith(s) for s in _FOLLOWUP_STARTERS)
 
-    confidence = 0.7 if is_question and qtype != "unknown" else 0.4
+    # Confidence must express QUESTION-ness, not whether we could also name the
+    # topic type. Conflating them sent unmistakable questions down the SLOW
+    # LLM-detection path ("How do partitions work in Kafka?" scored 0.4 — below
+    # the fast-path bar — only because "how do" isn't in the narrow qtype regex,
+    # while "What is X?" scored 0.7). A terminal '?' is the strongest question
+    # signal there is; an unnamed topic says nothing about whether it's a
+    # question. Measured by app/eval/live_bench `fast_path_coverage`.
+    if is_question and qtype != "unknown":
+        confidence = 0.7
+    elif is_question and by_mark:
+        confidence = 0.7      # explicit '?' — certain it's a question, type unnamed
+    else:
+        confidence = 0.4
     return QuestionMeta(is_question, qtype, is_followup, "", confidence,
                         "heuristic")
 

@@ -459,21 +459,94 @@ async def voice_ws(
         except Exception:  # noqa: BLE001
             pass
 
+    # (1a) VOCABULARY / CONTEXT BIASING for voice STT. The live path biases
+    # Whisper with the session's recent questions; voice had NO biasing at all,
+    # so technical terms and names decoded worse here than in Live. Bias with the
+    # configured seed plus THIS conversation's own recent turns — the decoder
+    # adapts to what's actually being discussed (doc §"Domain-specific
+    # terminology correction" / "Vocabulary adaptation"). Bounded: Whisper's
+    # prompt budget is ~224 tokens, so only the last few turns are used.
+    _recent_turns: list[str] = []
+
+    def _voice_bias_prompt() -> str | None:
+        seed = (getattr(cfg.stt, "prompt", "") or "").strip()
+        if _recent_turns:
+            seed = (seed + " Recent: " + " ".join(_recent_turns[-3:])).strip()
+        return seed or None
+
+    # (3) The client reports when the assistant is SPEAKING, so a transcript
+    # heard during playback can be classified as interrupt-vs-backchannel. Only
+    # then — a normal listening turn pays no classification latency.
+    _speaking = {"on": False}
+
     async def _on_utterance(text: str, full: str | None = None) -> None:
         t = (text or "").strip()
         # First-real-word gate: a lone cough/"uh" that STT rendered as a token
         # must not launch a turn (the "interrupts on small sounds" complaint).
         if t and _voice_is_meaningful(t):
-            await _send({"type": "transcript", "text": t})
+            _recent_turns.append(t)
+            del _recent_turns[:-6]          # keep the tail bounded
+            frame = {"type": "transcript", "text": t}
+            if _speaking["on"]:
+                # SEMANTIC barge-in: is the user taking the floor, or just
+                # following along? Generalizes to paraphrases the client's word
+                # lists can't ("hang on a second", "no I follow you"). None ⇒
+                # undecided/embedder cold ⇒ the client's fallback decides.
+                try:
+                    from app.live.barge_in import classify_utterance
+                    verdict = await asyncio.to_thread(classify_utterance, t)
+                    if verdict:
+                        frame["barge"] = verdict
+                except Exception:  # noqa: BLE001
+                    pass
+            await _send(frame)
 
     async def _on_partial(text: str) -> None:
         t = (text or "").strip()
-        if t:
-            await _send({"type": "partial", "text": t})
+        if not t:
+            return
+        # (2a) SEMANTIC COMPLETENESS on the partial. The client uses this to
+        # start answering SPECULATIVELY while the user is still finishing (doc
+        # §6 "Incremental Thinking"). Computed with the SAME `completeness()` the
+        # segmenter's adaptive endpointing uses — including interrogative-lead
+        # detection for questions the ASR left un-'?'-ed — so the client never
+        # needs its own heuristic. Fail-open: absent/false ⇒ no speculation.
+        complete = False
+        try:
+            from app.live.hypothesis import completeness as _completeness
+            complete = _completeness(t) == "complete"
+        except Exception:  # noqa: BLE001
+            complete = False
+        await _send({"type": "partial", "text": t, "complete": complete})
+
+    # (1b) Surface a swallowed STT failure/empty so a dead mic is EXPLAINABLE
+    # instead of silently producing nothing (live already did this; voice didn't).
+    async def _on_stt_status(kind: str, detail: str) -> None:
+        await _send({"type": "stt_status", "state": kind, "detail": detail})
+
+    # (1c) Pre-open the answer provider's connection WHILE the user is still
+    # talking, so the reply's first request never pays TLS setup. Rate-limited
+    # inside warm_live_provider's caller — one warm per ~20s covers a turn.
+    from time import monotonic as _mono
+    _warm_at = {"t": 0.0}
+
+    async def _on_speech_start() -> None:
+        now = _mono()
+        if now - _warm_at["t"] < 20.0:
+            return
+        _warm_at["t"] = now
+        try:
+            from app.perceived.prefetch import warm_live_provider
+            await warm_live_provider()
+        except Exception:  # noqa: BLE001
+            pass  # warming is best-effort — never affect the turn
 
     from app.audio.stream import AudioStreamSegmenter
     segmenter = AudioStreamSegmenter(on_utterance=_on_utterance,
-                                     on_partial=_on_partial)
+                                     on_partial=_on_partial,
+                                     prompt_provider=_voice_bias_prompt,
+                                     on_stt_status=_on_stt_status,
+                                     on_speech_start=_on_speech_start)
     await _send({"type": "ready"})
     try:
         while True:
@@ -499,6 +572,10 @@ async def voice_ws(
                         await segmenter.flush()  # finalize the current utterance
                     except Exception:  # noqa: BLE001
                         pass
+                elif _t == "assistant_speaking":
+                    # Playback state (3): while true, a finalized transcript is
+                    # semantically classified interrupt-vs-backchannel.
+                    _speaking["on"] = bool(ctrl.get("value"))
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001
@@ -1706,17 +1783,53 @@ async def live_listen(
                             extra["acoustic_reconfirm"] = True
                 except Exception:  # noqa: BLE001
                     _layer_failed()
-            # 2A-7 Code-switch: reply in the dominant language, terms intact.
+            # 2A-7 Multilingual (B1): answer in the QUESTION's language, decided
+            # PER-TURN so the interviewer can switch languages between questions.
+            #   • code-switched ("explain ... thoda detail mein") → dominant
+            #     language, technical terms kept intact;
+            #   • pure non-English ("Kafka kaise kaam karta hai") → that language.
+            # `answer_language: auto` uses the detected language; a fixed value
+            # pins it. English/unknown → no directive (today's behaviour).
             if getattr(cfg.live, "multilingual", False):
                 try:
                     from app.live import language as _lang2
                     if _lang2.is_code_switched(question):
                         _csd = _lang2.code_switch_directive(question)
-                        if _csd:
-                            directive = (directive + "\n" + _csd).strip() if directive else _csd
-                        extra["code_switch"] = _lang2.languages_present(question)
+                        _langs = _lang2.languages_present(question)
+                    else:
+                        _tgt = _lang2.target_language(_lang2.detect_language(question))
+                        _csd = _lang2.answer_directive(_tgt)
+                        _langs = [_tgt] if _tgt and _tgt != "en" else []
+                    if _csd:
+                        directive = (directive + "\n" + _csd).strip() if directive else _csd
+                    if _langs:
+                        extra["code_switch"] = _langs
                 except Exception:  # noqa: BLE001
                     _layer_failed()
+            # B3 Self-consistency: remind the model of the candidate's OWN prior
+            # answers so a later answer doesn't contradict an earlier one.
+            if getattr(cfg.live, "self_consistency", True):
+                try:
+                    from app.live import memory as _mem2
+                    _cons = _mem2.consistency_directive(
+                        _mem2.for_tracker(get_tracker(sid)))
+                    if _cons:
+                        directive = (directive + "\n" + _cons).strip() if directive else _cons
+                except Exception:  # noqa: BLE001
+                    _layer_failed()
+            # B4 Overlap/crosstalk: if the interviewer talked over the candidate
+            # during this question, its audio was partly masked → flag it (UI +
+            # a directive to answer the most likely intent) and clear the latch.
+            try:
+                if _overlap.saw_overlap():
+                    extra["overlap"] = True
+                    _ovd = ("Note: there was crosstalk (the interviewer spoke "
+                            "over other audio) — if the question reads garbled, "
+                            "answer its most likely intent and stay brief.")
+                    directive = (directive + "\n" + _ovd).strip() if directive else _ovd
+                _overlap.reset()
+            except Exception:  # noqa: BLE001
+                _layer_failed()
             # 2B-9 Interviewer hidden-goal / probe intent.
             if getattr(cfg.live, "interviewer_intent", True):
                 try:
@@ -2004,6 +2117,29 @@ async def live_listen(
                                     if _drafts:
                                         await send({"type": "meta", "qid": qid,
                                                     "predrafted": len(_drafts)})
+                                # A6: precompute FULL answers for the top predicted
+                                # follow-ups into the prepared store (instant serve
+                                # on a match). Background task AFTER this answer —
+                                # never blocks; self-limiting on provider exhaustion.
+                                if (getattr(cfg.live, "precompute_answers", True)
+                                        and resume_id):
+                                    _rid_pc = str(resume_id)
+                                    _prof_pc = profile or {}
+
+                                    async def _gen_pc(_q, _p=_prof_pc):
+                                        from app.tools import persona_answer
+                                        return await persona_answer.answer(
+                                            question=_q, profile=_p,
+                                            qtype="technical_concept",
+                                            profile_q=True)
+
+                                    _pct = asyncio.create_task(
+                                        _pred.precompute_followups(
+                                            _rid_pc, preds, _gen_pc,
+                                            limit=int(getattr(cfg.live,
+                                                "predictive_precompute_limit", 2))))
+                                    answer_tasks.add(_pct)
+                                    _pct.add_done_callback(answer_tasks.discard)
                         except Exception:  # noqa: BLE001
                             _layer_failed()
                     # 2C-24 Cross-round memory: durably record this topic against
@@ -2386,6 +2522,14 @@ async def live_listen(
         # Default is interviewer (today's single loopback source). The candidate
         # channel is ABSORBED into the shared graph + commitments, never answered.
         _role = (role or channel_role.get("role") or "interviewer").strip().lower()
+        # B6: a real transcript clears any STT-dropout gap → tell the FE audio
+        # recovered. (_stt_gap is bound below in the same handler scope before
+        # the receive loop that drives this callback, so the closure sees it.)
+        try:
+            if _stt_gap.note_transcript(utterance):
+                await send({"type": "context_recovered", "state": "audio_ok"})
+        except Exception:  # noqa: BLE001
+            pass
         # 2D-30 Live confidence recovery: track rolling STT confidence and, when
         # it stays degraded, trigger a ONE-TIME switch to the fallback ASR engine
         # (via app/stt/switch). Background + single-shot + fail-open — never
@@ -2770,10 +2914,29 @@ async def live_listen(
         await send({"type": "partial", "text": text})
         _maybe_speculate(text)
 
+    # B6: track STT dropout so a run of failures becomes an explicit recovery
+    # signal instead of silently answering half-heard questions.
+    from app.live.recovery import SttGapTracker as _SttGapTracker
+    _stt_gap = _SttGapTracker()
+    # B4: crosstalk/overlap monitor over the dual-source (interviewer+candidate)
+    # channels — flags an interviewer question that was talked-over.
+    from app.live.overlap import OverlapMonitor as _OverlapMonitor
+    _overlap = _OverlapMonitor()
+
     # Surface a swallowed STT failure/empty so a hot mic that produces no
     # transcript is EXPLAINABLE (was: silent nothing → "mic doesn't work").
     async def _on_stt_status(kind: str, detail: str) -> None:
         await send({"type": "stt_status", "state": kind, "detail": detail})
+        # B6: N consecutive failures → a one-time context-gap notice. The
+        # session summary (memory.l3) is intact, so context can be rebuilt.
+        try:
+            if _stt_gap.note_status(kind):
+                await send({"type": "context_gap", "state": "audio_dropout",
+                            "detail": "Audio was unclear for a moment — I may "
+                                      "have missed something. Your transcript "
+                                      "and context are preserved."})
+        except Exception:  # noqa: BLE001
+            pass
 
     # Speech-start hook: pre-open the live LLM provider connection while the
     # speaker is still talking, so the answer's first request never pays TLS
@@ -2869,6 +3032,15 @@ async def live_listen(
                                 else segmenter))
                     try:
                         await _seg.push(chunk)
+                        # B4: after pushing, record this channel's speaking state
+                        # so concurrent interviewer+candidate voice = overlap.
+                        if capture_state.get("fe_tagged") and not solo_mode:
+                            try:
+                                _rov = ("candidate" if _seg is candidate_segmenter
+                                        else "interviewer")
+                                _overlap.update(_rov, _seg._svad().speaking)
+                            except Exception:  # noqa: BLE001
+                                pass
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:  # noqa: BLE001
@@ -2995,6 +3167,31 @@ async def _handle_control(
                                       meta=payload.get("meta"))
                 if mi is not None and mi.text:
                     await send({"type": "meta", "modality": mi.modality,
+                                "ingested": True})
+                    await handle_utterance(mi.text, None,
+                                           payload.get("role") or "interviewer")
+            except Exception:  # noqa: BLE001
+                pass
+    elif kind == "screen_image":
+        # B2 Vision-fused live: a shared-screen SCREENSHOT (base64). Read it with
+        # the LOCAL GPU VLM (qwen2.5-vl) using the code-aware prompt, then feed
+        # the extracted code/text through the SAME pipeline as screen_text — so
+        # "walk me through this" / "solve what's on screen" works off the shared
+        # editor or whiteboard, not just the audio. Gated by cfg.live.multimodal.
+        if getattr(cfg.live, "multimodal", False):
+            try:
+                from app.vision import factory as _vf
+                from app.live import multimodal as _mm
+                img = (payload.get("image") or payload.get("content") or "")
+                if isinstance(img, str) and img.strip().startswith("data:") and "," in img:
+                    img = img.split(",", 1)[1]           # strip a data: URI prefix
+                prompt = (getattr(cfg.vision, "code_prompt", "")
+                          or getattr(cfg.vision, "prompt", ""))
+                text = await _vf.describe_images([img], prompt) if img else ""
+                mi = (_mm.to_utterance(_mm.SCREEN_TEXT, text,
+                                       meta=payload.get("meta")) if text else None)
+                if mi is not None and mi.text:
+                    await send({"type": "meta", "modality": "screen_image",
                                 "ingested": True})
                     await handle_utterance(mi.text, None,
                                            payload.get("role") or "interviewer")

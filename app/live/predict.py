@@ -181,3 +181,35 @@ def should_precompute(budget=None) -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+async def precompute_followups(resume_id, questions, generate, *,
+                               limit: int = 2, min_words: int = 25) -> int:
+    """A6 — GENERATE full answers for the top predicted follow-ups (off the hot
+    path) and cache them in the prepared store so a matching next question serves
+    INSTANTLY. `generate` is an async `(question) -> answer_text` callable the
+    caller supplies (keeps this module decoupled from the answer stack). Returns
+    how many were cached. Never raises; stops on the first generation failure
+    (a rate-limit during precompute must never cascade). Callers schedule this as
+    a background task AFTER the real answer is sent, so it never adds latency."""
+    if not resume_id or not questions:
+        return 0
+    try:
+        from app.live import prepared as _prepared
+        if not _prepared.enabled():
+            return 0
+    except Exception:  # noqa: BLE001
+        return 0
+    cached = 0
+    for q in list(questions)[:max(1, int(limit))]:
+        try:
+            text = await generate(q)
+        except Exception:  # noqa: BLE001 — providers busy: abandon precompute
+            break
+        try:
+            if text and len(str(text).split()) >= min_words:
+                if await _prepared.add_prepared(resume_id, str(q), str(text)):
+                    cached += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return cached

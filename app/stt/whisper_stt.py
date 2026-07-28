@@ -158,6 +158,41 @@ def transcribe(audio_np) -> str:
     return " ".join(s.text.strip() for s in segments if s.text.strip())
 
 
+@lru_cache(maxsize=1)
+def _partial_model():
+    """A3 — a SEPARATE, lighter model for streaming PARTIALS. Partials re-run on
+    the growing buffer every ~500ms, so using the heavy final model (large-v3)
+    makes the live caption lag and delays speculation. `cfg.stt.partial_model`
+    (e.g. 'base', 'small', 'distil-large-v3') loads a fast model for interim
+    passes while the FINAL pass keeps large-v3's accuracy. Empty → reuse the main
+    model (byte-identical to before). Same device/compute as the main model."""
+    pm = (getattr(cfg.stt, "partial_model", "") or "").strip()
+    if not pm or pm == cfg.stt.model:
+        return _model()
+    try:
+        from faster_whisper import WhisperModel
+        try:
+            from app.stt.factory import resolve_device
+            _device, _compute_type = resolve_device()
+        except Exception:  # noqa: BLE001
+            _device, _compute_type = cfg.stt.device, cfg.stt.compute_type
+        return WhisperModel(pm, device=_device, compute_type=_compute_type,
+                            cpu_threads=getattr(cfg.stt, "cpu_threads", 4))
+    except Exception:  # noqa: BLE001 — fall back to the main model, never fail
+        return _model()
+
+
+def transcribe_partial(audio_np) -> str:
+    """Interim pass using the lighter `_partial_model()` — fast, lower-accuracy;
+    the final pass re-transcribes with the accurate model. Greedy (beam 1) and
+    no vocab prompt/hotwords so it stays cheap."""
+    model = _partial_model()
+    segments, _info = model.transcribe(
+        audio_np, language=_resolve_language(model, audio_np),
+        vad_filter=False, beam_size=1, condition_on_previous_text=False)
+    return " ".join(s.text.strip() for s in segments if s.text.strip())
+
+
 def transcribe_with_timings(audio_np) -> list[dict]:
     """Same as `transcribe` but returns per-segment timing for the UI."""
     model = _model()

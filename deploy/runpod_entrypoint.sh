@@ -40,6 +40,25 @@ LOCAL_LLM_GGUF="${LOCAL_LLM_GGUF:-/workspace/models/local-llm.gguf}"
 # 7B) on a smaller GPU, or a 32B on a bigger one. A download failure degrades
 # gracefully — the floor stays inert and answers fall back to cloud.
 LOCAL_LLM_GGUF_URL="${LOCAL_LLM_GGUF_URL:-https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf}"
+# A6/A2 — SPECULATIVE DECODING draft model. A tiny same-family model (Qwen2.5-0.5B,
+# ~0.4GB) proposes tokens the 14B verifies in batches → ~1.5-2.5x faster generation,
+# IDENTICAL output. Must share the target's tokenizer family (0.5B ↔ 14B both Qwen2.5).
+# Best-effort: if the draft download fails OR the server build predates draft support,
+# the launch falls back to the plain (non-speculative) command — never a crash.
+LOCAL_LLM_DRAFT_GGUF="${LOCAL_LLM_DRAFT_GGUF:-/workspace/models/local-llm-draft.gguf}"
+LOCAL_LLM_DRAFT_URL="${LOCAL_LLM_DRAFT_URL:-https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf}"
+# A1 — enable prompt-prefix KV caching (reuse the stable persona+resume prefix
+# across questions) + flash-attention. Set 0 to launch with the plain command.
+LOCAL_LLM_FAST="${LOCAL_LLM_FAST:-1}"
+# A4 two-tier — an OPTIONAL smaller local model the router prefers for trivial /
+# definition questions (the big model handles hard ones). OFF by default so it
+# never risks OOM on a full 24GB card; set LOCAL_LLM_SMALL_MODEL_ID (+ URL) to a
+# small instruct GGUF (e.g. qwen2.5-3b-instruct) to enable. Served by the SAME
+# llama.cpp server (one port, switched by model_id).
+LOCAL_LLM_SMALL_MODEL_ID="${LOCAL_LLM_SMALL_MODEL_ID:-}"
+LOCAL_LLM_SMALL_GGUF="${LOCAL_LLM_SMALL_GGUF:-/workspace/models/local-llm-small.gguf}"
+LOCAL_LLM_SMALL_URL="${LOCAL_LLM_SMALL_URL:-https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf}"
+LLAMA_CFG="/workspace/llamacpp.json"
 PGBIN="$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)"
 mkdir -p /workspace "$HF_HOME" "$BACKUP_DIR"
 
@@ -52,7 +71,7 @@ if [ ! -f "$CFG" ]; then
   APP_PORT="$APP_PORT" PGPASS="$PGPASS" \
   OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" NVIDIA_API_KEY="${NVIDIA_API_KEY:-}" \
   LOCAL_LLM_ENABLED="$LOCAL_LLM_ENABLED" LOCAL_LLM_MODEL_ID="$LOCAL_LLM_MODEL_ID" \
-  LOCAL_LLM_PORT="$LOCAL_LLM_PORT" \
+  LOCAL_LLM_PORT="$LOCAL_LLM_PORT" LOCAL_LLM_SMALL_MODEL_ID="$LOCAL_LLM_SMALL_MODEL_ID" \
   "$VENV/bin/python" - "$APP_DIR/config.example.yaml" "$CFG" <<'PY'
 import os, sys, yaml
 src, dst = sys.argv[1], sys.argv[2]
@@ -72,10 +91,15 @@ if os.environ.get('NVIDIA_API_KEY'):
 # Local generation floor (§2.1 T4) — the app seeds an always-available local
 # model when this is on, so the never-empty ladder becomes structural.
 if os.environ.get('LOCAL_LLM_ENABLED') == '1':
-    c.setdefault('llm', {}).setdefault('local', {}).update(
+    _loc = c.setdefault('llm', {}).setdefault('local', {})
+    _loc.update(
         enabled=True,
         model_id=os.environ.get('LOCAL_LLM_MODEL_ID', 'qwen3-4b-instruct'),
         base_url='http://127.0.0.1:%s/v1' % os.environ.get('LOCAL_LLM_PORT', '8081'))
+    # A4: register the optional small tier so the router can prefer it for
+    # trivial questions (only when LOCAL_LLM_SMALL_MODEL_ID is set).
+    if os.environ.get('LOCAL_LLM_SMALL_MODEL_ID'):
+        _loc['small_model_id'] = os.environ['LOCAL_LLM_SMALL_MODEL_ID']
 yaml.safe_dump(c, open(dst, 'w'), sort_keys=False)
 print('wrote', dst)
 PY
@@ -129,11 +153,75 @@ if [ "$LOCAL_LLM_ENABLED" = "1" ]; then
     curl -fsSL "$LOCAL_LLM_GGUF_URL" -o "$LOCAL_LLM_GGUF" \
       || echo "   (GGUF download failed — local floor stays inert until present)"
   fi
+  # A2: fetch the tiny speculative-decoding draft model (best-effort).
+  if [ "$LOCAL_LLM_FAST" = "1" ] && [ ! -f "$LOCAL_LLM_DRAFT_GGUF" ]; then
+    echo "==> downloading speculative draft model -> $LOCAL_LLM_DRAFT_GGUF"
+    curl -fsSL "$LOCAL_LLM_DRAFT_URL" -o "$LOCAL_LLM_DRAFT_GGUF" \
+      || echo "   (draft download failed — speculative decoding stays off)"
+  fi
+  # A4: fetch the optional small two-tier model (best-effort; only when enabled).
+  if [ -n "$LOCAL_LLM_SMALL_MODEL_ID" ] && [ ! -f "$LOCAL_LLM_SMALL_GGUF" ]; then
+    echo "==> downloading small two-tier model -> $LOCAL_LLM_SMALL_GGUF"
+    curl -fsSL "$LOCAL_LLM_SMALL_URL" -o "$LOCAL_LLM_SMALL_GGUF" \
+      || echo "   (small-model download failed — two-tier stays single-tier)"
+  fi
   if [ -f "$LOCAL_LLM_GGUF" ]; then
+    # A1+A2: render a llama.cpp server config with flash-attention, prompt-prefix
+    # KV cache, and (if present) the speculative draft model. Written as JSON so
+    # bool/unknown-key handling is unambiguous. The supervisor command tries this
+    # ENHANCED launch first and FALLS BACK to the plain known-good command if it
+    # exits non-zero (e.g. an older server build rejects a key) — so a fast-path
+    # flag can never crash-loop the model. Set LOCAL_LLM_FAST=0 to force plain.
+    _DRAFT_JSON=""
+    if [ "$LOCAL_LLM_FAST" = "1" ] && [ -f "$LOCAL_LLM_DRAFT_GGUF" ]; then
+      _DRAFT_JSON=", \"draft_model\": \"${LOCAL_LLM_DRAFT_GGUF}\", \"draft_model_num_pred_tokens\": 10"
+    fi
+    # A4: a second served model entry for the small tier (same server/port).
+    _SMALL_JSON=""
+    if [ -n "$LOCAL_LLM_SMALL_MODEL_ID" ] && [ -f "$LOCAL_LLM_SMALL_GGUF" ]; then
+      _SMALL_JSON=$(cat <<SMEOF
+,
+    {
+      "model": "${LOCAL_LLM_SMALL_GGUF}",
+      "model_alias": "${LOCAL_LLM_SMALL_MODEL_ID}",
+      "n_gpu_layers": -1,
+      "n_ctx": 8192,
+      "n_batch": 512,
+      "chat_format": "chatml",
+      "flash_attn": true,
+      "cache": true,
+      "cache_type": "ram"
+    }
+SMEOF
+)
+    fi
+    cat > "$LLAMA_CFG" <<JSONEOF
+{
+  "host": "127.0.0.1",
+  "port": ${LOCAL_LLM_PORT},
+  "models": [
+    {
+      "model": "${LOCAL_LLM_GGUF}",
+      "model_alias": "${LOCAL_LLM_MODEL_ID}",
+      "n_gpu_layers": -1,
+      "n_ctx": 8192,
+      "n_batch": 512,
+      "chat_format": "chatml",
+      "flash_attn": true,
+      "cache": true,
+      "cache_type": "ram"${_DRAFT_JSON}
+    }${_SMALL_JSON}
+  ]
+}
+JSONEOF
+    _LL_ENHANCED="${VENV}/bin/python -m llama_cpp.server --config_file ${LLAMA_CFG}"
+    _LL_PLAIN="${VENV}/bin/python -m llama_cpp.server --model ${LOCAL_LLM_GGUF} --host 127.0.0.1 --port ${LOCAL_LLM_PORT} --n_gpu_layers -1 --chat_format chatml --n_ctx 8192"
+    _LL_CMD="$_LL_PLAIN"
+    [ "$LOCAL_LLM_FAST" = "1" ] && _LL_CMD="bash -c '${_LL_ENHANCED} || ${_LL_PLAIN}'"
     LOCALLLM_PROGRAM=$(cat <<LLEOF
 
 [program:localllm]
-command=${VENV}/bin/python -m llama_cpp.server --model ${LOCAL_LLM_GGUF} --host 127.0.0.1 --port ${LOCAL_LLM_PORT} --n_gpu_layers -1 --chat_format chatml --n_ctx 8192
+command=${_LL_CMD}
 autostart=true
 autorestart=true
 priority=15

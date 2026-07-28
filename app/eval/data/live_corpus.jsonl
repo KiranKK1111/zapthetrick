@@ -1,0 +1,34 @@
+# Live question-detection corpus (Gap 1). Annotated interviewer utterances.
+# Seed set covering the report's hard cases; append REAL transcribed interviews.
+{"text": "What is polymorphism?", "is_question": true, "questions": ["What is polymorphism?"], "topic": "oop", "source": "direct", "note": "direct question"}
+{"text": "Can you explain how a hashmap works?", "is_question": true, "questions": ["Can you explain how a hashmap works?"], "topic": "ds", "source": "indirect", "note": "indirect question"}
+{"text": "Tell me about your current project", "is_question": true, "questions": ["Tell me about your current project"], "topic": "project", "source": "imperative", "note": "no '?' imperative"}
+{"text": "How does Kafka handle event ordering", "is_question": true, "questions": ["How does Kafka handle event ordering"], "topic": "kafka", "source": "implicit", "note": "no '?' wh-question"}
+{"text": "Suppose one service goes down, how would you keep the system available?", "is_question": true, "questions": ["how would you keep the system available?"], "topic": "system_design", "source": "scenario", "note": "scenario question"}
+{"text": "In our organization we use Kafka extensively.", "is_question": false, "questions": [], "topic": "kafka", "source": "explanation", "note": "explanation, not a question"}
+{"text": "We mainly build microservices in Java.", "is_question": false, "questions": [], "topic": "microservices", "source": "explanation", "note": "context statement"}
+{"text": "Okay, that makes sense.", "is_question": false, "questions": [], "topic": "", "source": "acknowledgement", "note": "satisfaction / thread close"}
+{"text": "Right, good.", "is_question": false, "questions": [], "topic": "", "source": "acknowledgement", "note": "filler acknowledgement"}
+{"text": "What is Kafka, why is it used, and how would you scale it?", "is_question": true, "questions": ["What is Kafka?", "why is it used?", "how would you scale it?"], "topic": "kafka", "source": "multi", "note": "multi-question utterance"}
+{"text": "Walk me through how you would design a URL shortener", "is_question": true, "questions": ["Walk me through how you would design a URL shortener"], "topic": "system_design", "source": "imperative", "note": "design imperative, no '?'"}
+{"text": "How do partitions work in Kafka?", "is_question": true, "questions": ["How do partitions work in Kafka?"], "topic": "kafka", "source": "followup", "note": "follow-up question"}
+{"text": "What happens if a broker fails?", "is_question": true, "questions": ["What happens if a broker fails?"], "topic": "kafka", "source": "followup", "note": "nested follow-up"}
+{"text": "Describe a time you had a conflict with a teammate", "is_question": true, "questions": ["Describe a time you had a conflict with a teammate"], "topic": "behavioral", "source": "behavioral", "note": "behavioral, no '?'"}
+{"text": "So we were seeing high latency in production.", "is_question": false, "questions": [], "topic": "debugging", "source": "explanation", "note": "hint / setup, not the question"}
+{"text": "Why do you think Redis helped there?", "is_question": true, "questions": ["Why do you think Redis helped there?"], "topic": "redis", "source": "hint_then_q", "note": "the actual question after a hint"}
+{"text": "Compare TCP and UDP", "is_question": true, "questions": ["Compare TCP and UDP"], "topic": "networking", "source": "imperative", "note": "comparison imperative"}
+{"text": "Let me tell you a bit about the team.", "is_question": false, "questions": [], "topic": "", "source": "explanation", "note": "interviewer talking about themselves"}
+{"text": "How many requests per second should this handle?", "is_question": true, "questions": ["How many requests per second should this handle?"], "topic": "estimation", "source": "estimation", "note": "quantitative question"}
+{"text": "Alright, let's move on to system design.", "is_question": false, "questions": [], "topic": "system_design", "source": "transition", "note": "topic transition, not a question"}
+{"text": "Let me give you some context about the role first", "is_question": false, "questions": [], "topic": "", "source": "interviewer_self", "note": "interviewer offering to speak"}
+{"text": "I'll walk you through how our platform team is set up", "is_question": false, "questions": [], "topic": "", "source": "interviewer_self", "note": "interviewer will speak, not asking"}
+{"text": "So a bit about me, I lead the payments group here", "is_question": false, "questions": [], "topic": "", "source": "interviewer_self", "note": "interviewer self-introduction"}
+{"text": "Let me pull up your resume for a second", "is_question": false, "questions": [], "topic": "", "source": "logistics", "note": "interviewer housekeeping"}
+{"text": "Give me one moment, my screen froze", "is_question": false, "questions": [], "topic": "", "source": "logistics", "note": "interruption, not a question"}
+{"text": "Hmm, let me think of a good one for you", "is_question": false, "questions": [], "topic": "", "source": "interviewer_self", "note": "interviewer thinking aloud"}
+{"text": "Before we dive in, I want to describe the interview format", "is_question": false, "questions": [], "topic": "", "source": "interviewer_self", "note": "agenda setting"}
+{"text": "That's a really good point about idempotency", "is_question": false, "questions": [], "topic": "kafka", "source": "acknowledgement", "note": "praise, thread continues"}
+{"text": "I'm curious about your reasoning there", "is_question": true, "questions": ["I'm curious about your reasoning there"], "topic": "", "source": "implicit", "note": "implicit request to elaborate"}
+{"text": "Walk me through the tradeoffs you considered", "is_question": true, "questions": ["Walk me through the tradeoffs you considered"], "topic": "system_design", "source": "imperative", "note": "imperative request, no '?'"}
+{"text": "Explain the difference between a process and a thread", "is_question": true, "questions": ["Explain the difference between a process and a thread"], "topic": "os", "source": "imperative", "note": "definition imperative"}
+{"text": "How do I scale a websocket service to a million connections?", "is_question": true, "questions": ["How do I scale a websocket service to a million connections?"], "topic": "system_design", "source": "direct", "note": "the 'how do I' form"}

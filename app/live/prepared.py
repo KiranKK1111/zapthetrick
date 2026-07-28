@@ -241,6 +241,44 @@ async def prepare_for_resume(resume_id: str, profile: dict) -> int:
     return len(answers)
 
 
+async def add_prepared(resume_id: str, question: str, answer: str) -> bool:
+    """A6 — append ONE (question, answer) to the prepared store so a matching
+    later question serves INSTANTLY (zero model latency). Used to cache answers
+    precomputed for predicted follow-ups. Embeds the question so ask-time
+    matching stays a single dot product. Idempotent per normalized question;
+    fail-open → False on any error. Never blocks a real answer (callers run it
+    off the hot path)."""
+    import hashlib
+    if not enabled() or not resume_id or not question or not answer:
+        return False
+    try:
+        key = "fu_" + hashlib.sha1(
+            _norm_for_embed(question).encode("utf-8")).hexdigest()[:16]
+        loaded = _load(resume_id)
+        store = (loaded[0] if loaded else None) or {
+            "version": 1, "resume_id": str(resume_id),
+            "created_at": time.time(), "answers": {}}
+        answers = store.setdefault("answers", {})
+        if key in answers:
+            return False  # already prepared this question
+        answers[key] = {"question": question, "answer": answer}
+        try:
+            from app.rag import embedder as _emb
+            if _emb.is_ready():
+                vec = _emb.embed([_norm_for_embed(question)])[0]
+                store.setdefault("embedding_keys", []).append(key)
+                store.setdefault("embeddings", []).append(list(map(float, vec)))
+        except Exception:  # noqa: BLE001 — cue-based fallback still matches
+            pass
+        tmp = _store_path(resume_id).with_suffix(".tmp")
+        tmp.write_text(json.dumps(store), encoding="utf-8")
+        os.replace(tmp, _store_path(resume_id))
+        _CACHE.pop(str(resume_id), None)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def drop(resume_id: str) -> None:
     """Invalidate on resume delete/replace."""
     _CACHE.pop(str(resume_id), None)

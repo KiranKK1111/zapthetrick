@@ -19,11 +19,12 @@ DEFINITION = "definition"
 COMPARISON = "comparison"
 TRADEOFF = "tradeoff"
 DEBUGGING = "debugging"
+ESTIMATION = "estimation"
 GENERAL = "general"
 
 STRATEGIES = {
     STAR, DESIGN_SESSION, CODING_FLOW, DEFINITION, COMPARISON, TRADEOFF,
-    DEBUGGING, GENERAL,
+    DEBUGGING, ESTIMATION, GENERAL,
 }
 
 _SCAFFOLD = {
@@ -45,6 +46,11 @@ _SCAFFOLD = {
                "which each option wins."),
     DEBUGGING: ("Walk through debugging methodically: reproduce, hypothesize, "
                 "isolate, fix, then verify."),
+    ESTIMATION: ("Answer as a back-of-the-envelope estimation: state your "
+                 "assumptions and the numbers you're anchoring on, compute step "
+                 "by step (show the arithmetic), keep to round numbers and "
+                 "powers of ten, then give the final figure with its unit and a "
+                 "one-line sanity check."),
     GENERAL: "",
 }
 
@@ -52,6 +58,7 @@ _COMPARE_CUES = lexicons.LIVE_STRATEGY_COMPARE_CUES
 _TRADEOFF_CUES = lexicons.LIVE_STRATEGY_TRADEOFF_CUES
 _DEBUG_CUES = lexicons.LIVE_STRATEGY_DEBUG_CUES
 _CONCEPT_PREFIXES = lexicons.LIVE_STRATEGY_CONCEPT_PREFIXES
+_ESTIMATION_CUES = lexicons.LIVE_STRATEGY_ESTIMATION_CUES
 
 
 def select_strategy(qtype: str, phase: str = "", question: str = "") -> str:
@@ -67,6 +74,12 @@ def select_strategy(qtype: str, phase: str = "", question: str = "") -> str:
             return DESIGN_SESSION
         if ph == _phase.CODING or qt == "coding":
             return CODING_FLOW
+        # Estimation / back-of-envelope (B5) — before the generic cue checks,
+        # since "how many/how much" is a strong quantitative signal. (A design
+        # PHASE already returned DESIGN_SESSION above, so scoped estimation
+        # inside a design round still gets the design scaffold.)
+        if any(c in t for c in _ESTIMATION_CUES):
+            return ESTIMATION
         if any(c in t for c in _DEBUG_CUES):
             return DEBUGGING
         if any(c in t for c in _TRADEOFF_CUES):

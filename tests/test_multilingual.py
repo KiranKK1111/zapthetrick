@@ -135,3 +135,27 @@ def test_answer_directive_english_no_terms_is_blank():
 def test_answer_directive_english_with_terms():
     d = M.answer_language_directive("en", tech_terms=["Kafka"])
     assert "Kafka" in d                              # keep terms even in English
+
+
+# --- B1: per-turn answer language incl. Indian scripts (app/live/language.py) --
+import app.live.language as L
+
+
+def test_indian_scripts_detected_per_turn():
+    """Telugu/Tamil/Kannada/Hindi questions detect their own language (was: only
+    Devanagari mapped, so Telugu etc. silently degraded to English)."""
+    cases = {
+        "కాఫ్కా ఎలా పని చేస్తుంది": "te",
+        "காஃப்கா எப்படி வேலை செய்கிறது": "ta",
+        "ಕಾಫ್ಕಾ ಹೇಗೆ ಕೆಲಸ ಮಾಡುತ್ತದೆ": "kn",
+        "काफ्का कैसे काम करता है": "hi",
+    }
+    for text, code in cases.items():
+        assert L.detect_language(text) == code, text
+        # auto answer_language → a directive to reply in that language.
+        assert L.answer_directive(L.target_language(L.detect_language(text)))
+
+
+def test_english_question_no_language_directive():
+    assert L.detect_language("How does Kafka handle ordering") == "en"
+    assert L.answer_directive(L.target_language("en")) == ""

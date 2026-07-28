@@ -15,6 +15,7 @@ back to a dependency-free energy (RMS) gate so transcription still works.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from functools import lru_cache
 
 from app.core.config_loader import cfg
@@ -186,6 +187,13 @@ class StreamingVAD:
             getattr(cfg.audio, "vad_reentry_window_ms", 3000) or 0)
         self._reentry_delta = float(
             getattr(cfg.audio, "vad_reentry_delta", 0.15) or 0.0)
+        # PROSODY (A5): rolling per-window RMS of the recent VOICED windows. A
+        # human turn typically ends on a falling energy contour (the speaker
+        # "trails off"); a sustained/rising tail means they're mid-thought. We
+        # expose `tail_falling` so the segmenter can endpoint a shade sooner on a
+        # genuine trail-off and hold longer on a sustained one — prosodic turn
+        # detection the doc only gestures at. ~48 windows ≈ 1.5s of context.
+        self._energy_hist: deque = deque(maxlen=48)
 
     # -- internals ----------------------------------------------------------
     def _probs(self, audio):
@@ -240,7 +248,14 @@ class StreamingVAD:
         if audio.shape[0] == 0:
             return self.speaking
         voiced_any = False
-        for p in self._probs(audio):
+        probs = self._probs(audio)
+        # Per-window RMS energy (parallel to probs) for the prosody contour.
+        n_win = len(probs)
+        energies = []
+        for i in range(n_win):
+            w = audio[i * self._WIN:(i + 1) * self._WIN]
+            energies.append(float(np.sqrt(np.mean(w * w))) if w.size else 0.0)
+        for idx, p in enumerate(probs):
             if self.speaking:
                 threshold = self.end_threshold
             else:
@@ -259,6 +274,7 @@ class StreamingVAD:
                 self._speech_samples += self._WIN
                 self._trailing_silence_samples = 0
                 self._samples_since_voice = 0
+                self._energy_hist.append(energies[idx])
             else:
                 self._trailing_silence_samples += self._WIN
                 if self._samples_since_voice is not None:
@@ -283,10 +299,33 @@ class StreamingVAD:
                 and self._trailing_silence_samples * 1000.0 / self.sr
                 >= min_gap_ms)
 
+    @property
+    def tail_falling(self) -> bool:
+        """PROSODY (A5): True when the final ~200ms of speech is markedly QUIETER
+        than the body before it — the falling-energy contour of a finished turn.
+        Used to shave the endpoint gap on a genuine trail-off. Conservative: needs
+        enough history and a clear (>25%) drop, so a steady/rising tail (speaker
+        still going) never trips it. Neutral (False) when history is thin."""
+        hist = self._energy_hist
+        if len(hist) < 12:
+            return False
+        tail_n = 6                      # ~192ms at 32ms/window
+        tail = list(hist)[-tail_n:]
+        body = list(hist)[:-tail_n]
+        if not body:
+            return False
+        import statistics
+        body_mean = statistics.fmean(body)
+        tail_mean = statistics.fmean(tail)
+        if body_mean <= 0:
+            return False
+        return tail_mean <= 0.75 * body_mean
+
     def reset_utterance(self) -> None:
         """Start tracking a fresh utterance (keeps the acoustic model state —
         Silero context carries across utterances by design)."""
         self._speech_samples = 0
         self._trailing_silence_samples = 0
         self.speaking = False
+        self._energy_hist.clear()
 

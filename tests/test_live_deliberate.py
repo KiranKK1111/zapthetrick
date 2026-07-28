@@ -53,6 +53,20 @@ def test_strategy_comparison_and_definition():
                                     "what is a mutex") == strategy.DEFINITION
 
 
+def test_strategy_estimation_for_quantitative(monkeypatch):
+    # B5 — back-of-envelope / capacity questions get the estimation scaffold.
+    for q in ("how many servers would you need for 1M users",
+              "estimate the QPS for this API",
+              "roughly how much storage does that need",
+              "give me a ballpark for the throughput"):
+        assert strategy.select_strategy("technical_concept",
+                                        phase.TECHNICAL_SCREENING, q) == strategy.ESTIMATION
+    assert "assumption" in strategy.prompt_shaping(strategy.ESTIMATION).lower()
+    # A design ROUND still uses the design scaffold even for an estimation phrase.
+    assert strategy.select_strategy("technical_concept", phase.SYSTEM_DESIGN,
+                                    "how many shards would you use") == strategy.DESIGN_SESSION
+
+
 def test_general_strategy_has_empty_scaffold():
     assert strategy.prompt_shaping(strategy.GENERAL) == ""
 

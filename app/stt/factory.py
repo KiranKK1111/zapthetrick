@@ -59,6 +59,7 @@ def unload_all() -> None:
     try:
         from app.stt import whisper_stt
         whisper_stt._model.cache_clear()
+        whisper_stt._partial_model.cache_clear()
     except Exception:  # noqa: BLE001
         pass
     import gc
@@ -255,6 +256,12 @@ async def transcribe_partial(audio_np) -> str:
     as "no partial", never an error.
     """
     name = getattr(cfg.stt, "partial_provider", "") or ""
+    # A3: when partials run on faster-whisper AND a lighter `partial_model` is
+    # configured, use whisper_stt.transcribe_partial (that smaller model) so the
+    # live caption + speculation keep up. Otherwise the normal provider fn.
+    if name == "faster_whisper" and (getattr(cfg.stt, "partial_model", "") or "").strip():
+        from app.stt import whisper_stt
+        return await asyncio.to_thread(whisper_stt.transcribe_partial, audio_np)
     fn = _PROVIDERS.get(name)
     if fn is None:
         return ""

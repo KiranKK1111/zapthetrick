@@ -165,6 +165,45 @@ GATES: dict[str, dict] = {
     },
     # LIVE promotion: imperative/probing utterances that expect an answer
     # even without a question mark.
+    # The SPEAKER is taking/holding the floor — introducing themselves, setting
+    # the agenda, doing logistics, thinking aloud. Surface-identical to a request
+    # ("give me one moment" vs "give me an example"; "I want to describe the
+    # format" vs "describe your approach"), so the literal cue lists in
+    # app/live/implicit.py cannot separate them. Used as a VETO over a cue match:
+    # answering here talks over the interviewer instead of responding to them.
+    # The discriminator is direction — the speaker offering to talk / needing a
+    # beat, vs asking the listener to talk.
+    "speaker_holds_floor": {
+        "threshold": 0.60,
+        "positives": [
+            "let me tell you a bit about the team",
+            "let me give you some context about the role",
+            "i'll walk you through what we do here",
+            "let me explain how our team is structured",
+            "i want to give you some background on the company",
+            "before we dive in i want to describe the interview format",
+            "i'll start by telling you about the product",
+            "so a bit about me i lead the payments group here",
+            "give me one moment my screen froze",
+            "give me a second to pull up your resume",
+            "let me pull up your resume for a second",
+            "hold on let me share my screen",
+            "hmm let me think of a good one for you",
+            "let me check my notes",
+        ],
+        "negatives": [
+            "walk me through your approach",
+            "give me an example of that",
+            "tell me about your current project",
+            "describe a time you had a conflict with a teammate",
+            "explain how kafka handles ordering",
+            "talk to me about scaling",
+            "take me through the design",
+            "share your thoughts on this",
+            "walk me through the tradeoffs you considered",
+            "give me a rough estimate of the throughput",
+        ],
+    },
     "implicit_request": {
         "threshold": 0.62,
         "positives": [
@@ -186,6 +225,18 @@ GATES: dict[str, dict] = {
             "let me check my notes",
             "we're running a bit short on time",
             "great, sounds good",
+            # The INTERVIEWER offering to speak — surface-similar to "tell me
+            # about X" / "walk me through X" but the opposite direction: they
+            # are about to talk, so answering talks OVER their introduction.
+            # (Caught by the live eval harness: "Let me tell you a bit about the
+            # team" was being promoted to a question once the embedder was live.)
+            "let me tell you a bit about the team",
+            "let me tell you about the role",
+            "i'll walk you through what we do here",
+            "let me explain how our team is structured",
+            "i want to give you some background on the company",
+            "first let me describe the interview process",
+            "i'll start by telling you about the product",
         ],
     },
     # LIVE promotion: hypothetical scenario probes.

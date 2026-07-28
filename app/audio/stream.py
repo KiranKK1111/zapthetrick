@@ -149,6 +149,11 @@ class AudioStreamSegmenter:
         # is the accuracy authority — never substitute.
         if (getattr(cfg.stt, "partial_provider", "") or "") != cfg.stt.provider:
             return False
+        # A3: same provider but a lighter `partial_model` is ALSO a weaker engine
+        # — the final large-v3 pass is the authority, so don't reuse its text.
+        _pm = (getattr(cfg.stt, "partial_model", "") or "").strip()
+        if _pm and _pm != cfg.stt.model:
+            return False
         n_samples, text = ready
         return bool(text) and voiced_n >= 0 and n_samples == voiced_n
 
@@ -276,11 +281,22 @@ class AudioStreamSegmenter:
         if not txt:
             return base
         kind = completeness(txt)
+        # PROSODY (A5): a falling-energy tail means the speaker trailed off — a
+        # real turn-final cue — so shave the gap a touch on an already-plausible
+        # ending. NEVER shortens an INCOMPLETE tail (that must wait for the rest),
+        # and the floor keeps it safe. Opt-out via cfg.audio.prosody_endpointing.
+        prosody = getattr(cfg.audio, "prosody_endpointing", True)
+        falling = (prosody and kind != "incomplete"
+                   and getattr(svad, "tail_falling", False))
+        _scale = float(getattr(cfg.audio, "prosody_gap_scale", 0.8) or 0.8)
         if kind == "complete":
-            return max(280.0, base * 0.55)
+            gap = max(280.0, base * 0.55)
+            return max(250.0, gap * _scale) if falling else gap
         if kind == "incomplete":
             return float(getattr(cfg.audio, "incomplete_gap_ms", 1200))
-        return base
+        # neutral: a falling contour lets an otherwise-ambiguous ending settle
+        # a little sooner (still bounded), while a sustained one keeps the base.
+        return max(300.0, base * _scale) if falling else base
 
     async def push(self, audio_chunk) -> None:
         """Append a chunk and, when an utterance finalises, spawn its

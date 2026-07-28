@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       openssh-server \
       python3 python3-venv python3-dev python3-pip \
       libgomp1 libmagic1 poppler-utils bubblewrap supervisor \
+      espeak-ng \
       default-jdk nodejs npm ruby php-cli perl r-base sqlite3 golang-go \
   && install -d /usr/share/postgresql-common/pgdg \
   && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
@@ -71,7 +72,21 @@ RUN python3 -m venv "$VENV" \
   && "$VENV/bin/pip" install --no-cache-dir -r /tmp/req.txt \
   # 8-bit quantization for the 7B VLM (GPU-only; kept out of requirements.txt so
   # the CPU/Windows desktop build isn't forced to install a CUDA wheel).
-  && "$VENV/bin/pip" install --no-cache-dir bitsandbytes
+  && "$VENV/bin/pip" install --no-cache-dir bitsandbytes \
+  # Gap 3: onnxruntime-gpu unlocks the baked Parakeet TDT STT (~8x realtime — the
+  # fastest partial/streaming path, set stt.partial_provider=parakeet) AND
+  # RapidOCR (the vision OCR cross-check). On the Linux CUDA-12.8 base the PyPI
+  # onnxruntime-gpu wheel links CUDA 12 correctly (the Windows CUDA-13 mismatch
+  # that forces a special feed does NOT apply here). Kept off requirements.txt so
+  # the Windows desktop build isn't forced onto a CUDA wheel.
+  && "$VENV/bin/pip" install --no-cache-dir onnxruntime-gpu rapidocr-onnxruntime \
+  # GPU-LOCAL TTS. The only other engine is Edge Neural = Microsoft's CLOUD, so
+  # every spoken sentence costs client→pod→Microsoft→pod→client. Kokoro-82M
+  # (~350MB) synthesizes on the pod's GPU beside the LLM, removing that hop —
+  # the main reason spoken replies lag vs ChatGPT voice. `lameenc` encodes the
+  # PCM to MP3 (the format the client's player expects). Registration is
+  # fail-open: absent/failing runtime ⇒ Edge, exactly as before.
+  && "$VENV/bin/pip" install --no-cache-dir kokoro lameenc
 
 # 5b) Local generation floor (§2.1 T4): llama.cpp OpenAI-compatible server, run on
 #     127.0.0.1 when LOCAL_LLM_ENABLED=1. Built with CUDA (-DGGML_CUDA=on) so the

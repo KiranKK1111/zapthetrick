@@ -196,6 +196,23 @@ async def _bootstrap_llm_routing(migration_task: "asyncio.Task") -> None:
                              "catalog rows to the device user", _moved)
         except Exception:  # noqa: BLE001 — reclaim must never block startup
             log.debug("orphan-catalog reclaim skipped", exc_info=True)
+        # GPU-local TTS: register Kokoro so spoken replies are synthesized ON the
+        # pod instead of round-tripping to Microsoft's Edge Neural cloud for every
+        # sentence. No-op (and Edge stays) when the runtime isn't installed.
+        try:
+            from app.live.kokoro_engine import register_if_available
+            if register_if_available():
+                log.info("voice: Kokoro GPU TTS registered (no cloud round-trip).")
+        except Exception:  # noqa: BLE001
+            log.debug("kokoro registration skipped", exc_info=True)
+        # VRAM preflight (Gap 4): log the estimated multi-model GPU footprint vs
+        # actual VRAM so an over-budget deploy is visible BEFORE the models try to
+        # load (never fatal — a warning + what to trim).
+        try:
+            from app.core.vram_preflight import preflight as _vram_preflight
+            _vram_preflight()
+        except Exception:  # noqa: BLE001
+            log.debug("vram preflight skipped", exc_info=True)
         # Seed the on-pod local model floor (§2.1 T4) when enabled — an
         # always-available route that makes the never-empty ladder structural.
         try:

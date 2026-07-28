@@ -75,6 +75,9 @@ class LocalLLMSection(BaseModel):
     enabled: bool = False
     model_id: str = "qwen3-4b-instruct"
     base_url: str = "http://127.0.0.1:8081/v1"
+    # A4 two-tier: an optional smaller local model (same llama.cpp server) that
+    # the router prefers for trivial/definition questions. "" → single-tier.
+    small_model_id: str = ""
 
 
 class LLMSection(BaseModel):
@@ -223,6 +226,11 @@ class STTSection(BaseModel):
     # streams to the UI. "" disables partials. The final (authoritative)
     # transcription still uses `provider` + `fallback_providers`.
     partial_provider: str = "parakeet"
+    # A3: lighter faster-whisper model for the streaming PARTIAL passes only
+    # (e.g. "base", "small", "distil-large-v3"); the FINAL pass keeps `model`
+    # (large-v3) for accuracy. "" → reuse `model` for partials (no change). Only
+    # applies when partial_provider == "faster_whisper".
+    partial_model: str = ""
     # Reuse a completed partial as the FINAL transcript when it covered
     # exactly the finalized audio and the partial engine IS the final
     # engine (same model + same samples = same text) — skips the redundant
@@ -430,6 +438,11 @@ class AudioSection(BaseModel):
     # '?'): the speaker paused mid-thought, so wait longer than the normal
     # endpoint before finalizing the fragment.
     incomplete_gap_ms: int = 1200
+    # PROSODY endpointing (A5): a falling-energy tail (speaker trailing off) is a
+    # turn-final cue → shave the endpoint gap by `prosody_gap_scale` on an
+    # already-plausible ending (never on an incomplete one; a floor keeps it safe).
+    prosody_endpointing: bool = True
+    prosody_gap_scale: float = 0.8
     # PRE-ROLL: how much pre-speech audio is prepended when an utterance
     # starts, so a soft onset the VAD only caught mid-word isn't clipped.
     preroll_ms: int = 240
@@ -1135,6 +1148,12 @@ class VoiceSection(BaseModel):
     text-only, no-voice behaviour. The heavy engines (Kokoro TTS, SER head, wake
     ECAPA) live on the GPU plane; these flags gate the LOGIC seams around them."""
     tts: bool = False
+    # Gap 5: enable a NATIVE acoustic echo canceller for true speaker barge-in
+    # (interrupt over the speakers). Only takes effect when a native build has
+    # registered an implementation via app/live/aec.register_aec — otherwise the
+    # seam is a no-op passthrough (today's behaviour). The semantic barge-in +
+    # echo-reference guard work regardless.
+    native_aec: bool = False
     # Which neural TTS engine voices the answer: "edge" = Edge Neural (free,
     # key-less; the local/dev default), "kokoro" = the on-GPU-pod engine (falls
     # back to edge when the pod engine isn't registered). §10.5.
@@ -2078,6 +2097,12 @@ class LiveSection(BaseModel):
     # Phase 11 — live knowledge, prediction & operability.
     # Predict likely follow-ups (+ optional speculative pre-warm).
     question_prediction: bool = False
+    # A6: precompute FULL answers for the top predicted follow-ups (off the hot
+    # path) into the prepared store so a matching next question serves instantly.
+    # Self-limiting (aborts on provider exhaustion); ideal once the local GPU
+    # model is serving (free, no rate limits). Needs question_prediction on.
+    precompute_answers: bool = True
+    predictive_precompute_limit: int = 2
     # Topic-triggered interview-knowledge retrieval (+ optional pack bias).
     interview_knowledge: bool = False
     knowledge_pack: str = ""
@@ -2153,6 +2178,18 @@ class LiveSection(BaseModel):
     candidate_channel: bool = False     # absorb candidate speech (never answered)
     role_memory: bool = False           # role-tagged shared conversation graph
     commitment_tracking: bool = False   # stated salary/offer/notice + interviewer signals
+    # B3: remind the model of the candidate's OWN prior answers so later answers
+    # don't contradict earlier ones (interviewers probe this). Deterministic.
+    self_consistency: bool = True
+    # B6: after N consecutive STT failures/empties (audio/network dropout), emit
+    # a `context_gap` frame so the FE warns the user + the pipeline stops
+    # confidently answering half-heard questions. The first real transcript
+    # recovers. Session summary is preserved so context rebuilds.
+    stt_gap_recovery: bool = True
+    stt_gap_threshold: int = 3
+    # B4: detect interviewer/candidate crosstalk (both channels voiced) on the
+    # dual-source path and flag the masked question. Heuristic, dual-source only.
+    overlap_detection: bool = True
 
     # Capture/answering mode DEFAULT when the client sends no `mode` on connect.
     # False → "standard" (real interview: answer the interviewer only, absorb the

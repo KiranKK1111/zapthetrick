@@ -69,6 +69,35 @@ class MultiLevelMemory:
         return ctx
 
 
+def consistency_directive(memory, *, n: int = 3, max_chars: int = 160) -> str:
+    """B3 — a compact reminder of what the candidate has ALREADY said this
+    session, so later answers don't CONTRADICT earlier ones (interviewers probe
+    exactly this — "earlier you said X, now Y?"). Pulls the last `n` answered
+    turns, one short snippet each. Deterministic (no LLM), token-cheap. Returns
+    '' when nothing has been answered yet. Never raises."""
+    try:
+        said: list[str] = []
+        for tr in reversed(memory._turns()):  # noqa: SLF001 — same package
+            ans = (getattr(tr, "answer", "") or "").strip()
+            if not ans:
+                continue
+            q = (getattr(tr, "question", "") or "").strip()
+            snippet = ans.split(". ")[0].strip()
+            if len(snippet) > max_chars:
+                snippet = snippet[:max_chars].rsplit(" ", 1)[0] + "…"
+            said.append(f'- On "{q[:60]}": {snippet}')
+            if len(said) >= n:
+                break
+        if not said:
+            return ""
+        said.reverse()
+        return ("Stay consistent with what you have ALREADY told this interviewer "
+                "this session — do not contradict these earlier statements:\n"
+                + "\n".join(said))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def for_tracker(tracker) -> MultiLevelMemory:
     """Return the MultiLevelMemory attached to a per-session context tracker,
     creating it lazily (stored on the tracker object — in-process, no DB)."""

@@ -17,11 +17,25 @@ _NAMES = {
     "en": "English", "hi": "Hindi", "es": "Spanish", "fr": "French",
     "de": "German", "pt": "Portuguese", "ru": "Russian", "ar": "Arabic",
     "zh": "Chinese", "ja": "Japanese", "ko": "Korean",
+    # Indian languages (real interviews mix these with English).
+    "te": "Telugu", "ta": "Tamil", "kn": "Kannada", "ml": "Malayalam",
+    "bn": "Bengali", "gu": "Gujarati", "pa": "Punjabi", "or": "Odia",
+    "mr": "Marathi",
 }
 
-# Script ranges (strong signals).
+# Script ranges (strong signals). Indian scripts each have their own block, so a
+# Telugu/Tamil/Kannada/\u2026 question is detected (and answered) in that language,
+# not silently degraded to English (the prior gap: only Devanagari was mapped).
 _SCRIPTS = [
-    ("hi", re.compile(r"[\u0900-\u097F]")),     # Devanagari
+    ("hi", re.compile(r"[\u0900-\u097F]")),     # Devanagari (Hindi/Marathi)
+    ("bn", re.compile(r"[\u0980-\u09FF]")),     # Bengali
+    ("pa", re.compile(r"[\u0A00-\u0A7F]")),     # Gurmukhi (Punjabi)
+    ("gu", re.compile(r"[\u0A80-\u0AFF]")),     # Gujarati
+    ("or", re.compile(r"[\u0B00-\u0B7F]")),     # Odia
+    ("ta", re.compile(r"[\u0B80-\u0BFF]")),     # Tamil
+    ("te", re.compile(r"[\u0C00-\u0C7F]")),     # Telugu
+    ("kn", re.compile(r"[\u0C80-\u0CFF]")),     # Kannada
+    ("ml", re.compile(r"[\u0D00-\u0D7F]")),     # Malayalam
     ("ar", re.compile(r"[\u0600-\u06FF]")),     # Arabic
     ("ru", re.compile(r"[\u0400-\u04FF]")),     # Cyrillic
     ("zh", re.compile(r"[\u4E00-\u9FFF]")),     # CJK

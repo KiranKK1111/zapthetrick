@@ -139,12 +139,40 @@ def test_dynamic_endpointing_question_stem_gap_not_split():
 
 
 def test_completeness_object_present_is_not_incomplete():
-    """A complete short question ('What is microservices') must NOT be treated
-    as incomplete (that would add a needless 2s delay to every such answer)."""
+    """A complete short question ('What is microservices') must NOT be treated as
+    incomplete (that would add a needless 2s delay). It now reads as COMPLETE via
+    interrogative-lead detection — the ASR just dropped the '?' — so it endpoints
+    and settles FAST (semantic-completion, the report's no-'?'-question case)."""
     from app.live.hypothesis import completeness
-    assert completeness("What is microservices") == "neutral"
-    assert completeness("what motivates you") == "neutral"
-    assert completeness("tell me about your project") == "neutral"
+    assert completeness("What is microservices") == "complete"
+    assert completeness("what motivates you") == "complete"
+    assert completeness("tell me about your project") == "complete"
+    # A closed object still isn't INCOMPLETE (the property the delay depends on).
+    assert completeness("What is microservices") != "incomplete"
+
+
+def test_interrogative_lead_completes_without_question_mark():
+    """No-'?' questions endpoint fast; explanations and dangling stems don't."""
+    from app.live.hypothesis import completeness
+    # Interrogative-lead + real object → complete (fast endpoint), no '?' needed.
+    for q in ("how does kafka handle ordering", "explain kubernetes ingress",
+              "which database would you pick", "do you know redis internals"):
+        assert completeness(q) == "complete", q
+    # A leading filler is skipped before reading the lead word.
+    assert completeness("so what is a service mesh") == "complete"
+    # Statements that are NOT question-led must stay neutral (never answered on
+    # a fast endpoint as if they were a question).
+    for s in ("we use kafka extensively", "consumer groups are important",
+              "our team owns the payments platform"):
+        assert completeness(s) == "neutral", s
+    # A dangling interrogative stem still waits (incomplete), lead notwithstanding.
+    for d in ("can you explain", "how would you", "what is the"):
+        assert completeness(d) == "incomplete", d
+    # A bare SUBJECT pronoun after an auxiliary is still mid-question — else
+    # "how do I <pause> center a div" endpoints early and gets chopped.
+    for d in ("how do i", "why would we", "when did they", "how does it"):
+        assert completeness(d) == "incomplete", d
+    assert completeness("how do i center a div") == "complete"
 
 
 def test_take_clears_buffer():

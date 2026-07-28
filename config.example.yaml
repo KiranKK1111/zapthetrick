@@ -66,7 +66,16 @@ stt:
   parakeet_model: nemo-parakeet-tdt-0.6b-v3
   parakeet_quantization: int8
   parakeet_use_gpu: true
+  # Partial (streaming) STT engine. 'faster_whisper' + partial_model below is the
+  # default. For the FASTEST partials, set 'parakeet' — Parakeet TDT v3 (~8x
+  # realtime, multilingual) is now baked with onnxruntime-gpu (Gap 3); it ignores
+  # partial_model and streams via its own engine.
   partial_provider: faster_whisper
+  # A3: lighter model for streaming partials (fast caption + earlier speculation);
+  # the final pass still uses large-v3. 'small' is multilingual + ~3-4x faster and
+  # adds ~1GB VRAM. Set '' to reuse large-v3 for partials. Ignored when
+  # partial_provider is 'parakeet'.
+  partial_model: small
   final_from_partial: true
   dual_engine_enabled: false
   secondary_provider: null
@@ -113,7 +122,11 @@ audio:
   chunk_ms: 200
   vad: silero
   vad_threshold: 0.5
-  endpoint_silence_ms: 650
+  # Base end-of-speech gap. The segmenter scales this DOWN for a partial that
+  # already reads as a complete question (~base*0.55) and UP for short/incomplete
+  # ones, so lowering the base speeds the common "clear question then pause" case
+  # (~300ms endpoint) without chopping mid-thought pauses (those still wait ~1.2s).
+  endpoint_silence_ms: 550
   min_utterance_ms: 700
   short_utterance_gap_ms: 1200
   max_utterance_ms: 15000
@@ -411,7 +424,9 @@ ops:
   resurrect_after_failures: 3
 voice:
   tts: true
-  tts_engine: edge
+  # GPU-local synthesis on the pod (no Microsoft round-trip per sentence).
+  # Automatically degrades to 'edge' when the Kokoro runtime isn't present.
+  tts_engine: kokoro
   loop: false
   wake_word: false
   conversational_intel: true
@@ -582,7 +597,12 @@ live:
   structured_events: true
   state_machine: true
   turn_taking: true
-  turn_settle_ms: 600
+  # Fixed wait after a finalized question before answering (lets a multi-part
+  # question "…X? and also Y?" merge instead of answering X alone). 600ms was
+  # pure latency on single questions; 300 still catches a quick continuation but
+  # cuts the perceived pause→answer delay in half. Speculation already pre-starts
+  # the answer on the partial, so this only bounds the non-speculative path.
+  turn_settle_ms: 300
   continuation_merge: true
   continuation_window_s: 8.0
   hypothetical_question: true
