@@ -73,3 +73,11 @@ def test_a_raising_kokoro_still_degrades(monkeypatch):
     monkeypatch.setattr(tts_synth, "_synth_edge", _fake_edge)
     assert asyncio.run(tts_synth.synthesize("hello", speed=1.0)) == b"EDGE"
     tts_synth.set_kokoro(None)
+
+
+def test_non_english_text_falls_back_to_edge():
+    """Kokoro's pipeline is English G2P; Hindi/Telugu replies must return b""
+    so tts_synth degrades to Edge's LANGUAGE-MATCHED voices — otherwise the
+    multilingual voice feature comes out mangled."""
+    assert K.synth("काफ्का कैसे काम करता है", "af_heart", 1.0) == b""
+    assert K.synth("కాఫ్కా అంటే ఏమిటి", "af_heart", 1.0) == b""

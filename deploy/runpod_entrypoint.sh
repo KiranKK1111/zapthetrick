@@ -148,24 +148,37 @@ sudo -u postgres "$PGBIN/pg_ctl" -D "$PGDATA" -w stop   # supervisor owns it now
 LOCALLLM_PROGRAM=""
 if [ "$LOCAL_LLM_ENABLED" = "1" ]; then
   mkdir -p "$(dirname "$LOCAL_LLM_GGUF")"
-  if [ ! -f "$LOCAL_LLM_GGUF" ]; then
-    echo "==> downloading local LLM GGUF -> $LOCAL_LLM_GGUF"
-    curl -fsSL "$LOCAL_LLM_GGUF_URL" -o "$LOCAL_LLM_GGUF" \
-      || echo "   (GGUF download failed — local floor stays inert until present)"
-  fi
-  # A2: fetch the tiny speculative-decoding draft model (best-effort).
-  if [ "$LOCAL_LLM_FAST" = "1" ] && [ ! -f "$LOCAL_LLM_DRAFT_GGUF" ]; then
-    echo "==> downloading speculative draft model -> $LOCAL_LLM_DRAFT_GGUF"
-    curl -fsSL "$LOCAL_LLM_DRAFT_URL" -o "$LOCAL_LLM_DRAFT_GGUF" \
-      || echo "   (draft download failed — speculative decoding stays off)"
-  fi
-  # A4: fetch the optional small two-tier model (best-effort; only when enabled).
-  if [ -n "$LOCAL_LLM_SMALL_MODEL_ID" ] && [ ! -f "$LOCAL_LLM_SMALL_GGUF" ]; then
-    echo "==> downloading small two-tier model -> $LOCAL_LLM_SMALL_GGUF"
-    curl -fsSL "$LOCAL_LLM_SMALL_URL" -o "$LOCAL_LLM_SMALL_GGUF" \
-      || echo "   (small-model download failed — two-tier stays single-tier)"
-  fi
-  if [ -f "$LOCAL_LLM_GGUF" ]; then
+  # Model downloads run in the BACKGROUND (2026-07-28). They used to run inline
+  # HERE — up to ~9.4GB before supervisord even started — so nothing listened on
+  # the app port for minutes and RunPod's HTTP probe showed "Initializing… taking
+  # longer than expected" (a dead-port window, not a broken app). Now the app
+  # binds within seconds of boot and the llama server WAITS for its file (the
+  # wait loop in its command below); draft/small models are picked up on the
+  # next boot if they finish after the JSON render (best-effort extras).
+  (
+    if [ ! -f "$LOCAL_LLM_GGUF" ]; then
+      echo "==> downloading local LLM GGUF -> $LOCAL_LLM_GGUF"
+      curl -fsSL "$LOCAL_LLM_GGUF_URL" -o "$LOCAL_LLM_GGUF.part" \
+        && mv "$LOCAL_LLM_GGUF.part" "$LOCAL_LLM_GGUF" \
+        || echo "   (GGUF download failed — local floor stays inert until present)"
+    fi
+    if [ "$LOCAL_LLM_FAST" = "1" ] && [ ! -f "$LOCAL_LLM_DRAFT_GGUF" ]; then
+      echo "==> downloading speculative draft model -> $LOCAL_LLM_DRAFT_GGUF"
+      curl -fsSL "$LOCAL_LLM_DRAFT_URL" -o "$LOCAL_LLM_DRAFT_GGUF.part" \
+        && mv "$LOCAL_LLM_DRAFT_GGUF.part" "$LOCAL_LLM_DRAFT_GGUF" \
+        || echo "   (draft download failed — speculative decoding stays off)"
+    fi
+    if [ -n "$LOCAL_LLM_SMALL_MODEL_ID" ] && [ ! -f "$LOCAL_LLM_SMALL_GGUF" ]; then
+      echo "==> downloading small two-tier model -> $LOCAL_LLM_SMALL_GGUF"
+      curl -fsSL "$LOCAL_LLM_SMALL_URL" -o "$LOCAL_LLM_SMALL_GGUF.part" \
+        && mv "$LOCAL_LLM_SMALL_GGUF.part" "$LOCAL_LLM_SMALL_GGUF" \
+        || echo "   (small-model download failed — two-tier stays single-tier)"
+    fi
+    echo "==> model fetch done"
+  ) >> /workspace/modelfetch.log 2>&1 &
+  # Always configure the server when enabled (the old `if file exists` gate
+  # meant a fresh volume got NO llama program at all until the next restart).
+  if true; then
     # A1+A2: render a llama.cpp server config with flash-attention, prompt-prefix
     # KV cache, and (if present) the speculative draft model. Written as JSON so
     # bool/unknown-key handling is unambiguous. The supervisor command tries this
@@ -216,8 +229,11 @@ SMEOF
 JSONEOF
     _LL_ENHANCED="${VENV}/bin/python -m llama_cpp.server --config_file ${LLAMA_CFG}"
     _LL_PLAIN="${VENV}/bin/python -m llama_cpp.server --model ${LOCAL_LLM_GGUF} --host 127.0.0.1 --port ${LOCAL_LLM_PORT} --n_gpu_layers -1 --chat_format chatml --n_ctx 8192"
-    _LL_CMD="$_LL_PLAIN"
-    [ "$LOCAL_LLM_FAST" = "1" ] && _LL_CMD="bash -c '${_LL_ENHANCED} || ${_LL_PLAIN}'"
+    # Wait for the (background) download to land the model — the `.part` → mv
+    # rename is atomic, so seeing the final name means a COMPLETE file.
+    _LL_WAIT="until [ -f ${LOCAL_LLM_GGUF} ]; do echo waiting for model download; sleep 5; done"
+    _LL_CMD="bash -c '${_LL_WAIT}; ${_LL_PLAIN}'"
+    [ "$LOCAL_LLM_FAST" = "1" ] && _LL_CMD="bash -c '${_LL_WAIT}; ${_LL_ENHANCED} || ${_LL_PLAIN}'"
     LOCALLLM_PROGRAM=$(cat <<LLEOF
 
 [program:localllm]

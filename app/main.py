@@ -203,8 +203,13 @@ async def _bootstrap_llm_routing(migration_task: "asyncio.Task") -> None:
             from app.live.kokoro_engine import register_if_available
             if register_if_available():
                 log.info("voice: Kokoro GPU TTS registered (no cloud round-trip).")
+            else:
+                # Log the NEGATIVE too — a silent branch here once made a pod
+                # deploy undiagnosable ("is Kokoro even installed?").
+                log.info("voice: Kokoro runtime not available — TTS uses Edge.")
         except Exception:  # noqa: BLE001
-            log.debug("kokoro registration skipped", exc_info=True)
+            log.info("voice: Kokoro registration failed — TTS uses Edge.",
+                     exc_info=True)
         # VRAM preflight (Gap 4): log the estimated multi-model GPU footprint vs
         # actual VRAM so an over-budget deploy is visible BEFORE the models try to
         # load (never fatal — a warning + what to trim).

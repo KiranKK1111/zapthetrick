@@ -108,6 +108,12 @@ def estimate_plan() -> list[tuple[str, int]]:
             plan.append(("speculative-draft", 600))
     except Exception:  # noqa: BLE001
         pass
+    # GPU TTS (Kokoro-82M ≈ 350MB + activations) when it's the selected engine.
+    try:
+        if (getattr(cfg.voice, "tts_engine", "edge") or "edge") == "kokoro":
+            plan.append(("tts (kokoro)", 500))
+    except Exception:  # noqa: BLE001
+        pass
     return plan
 
 
@@ -132,7 +138,10 @@ def preflight() -> dict:
         report = {"plan": plan, "estimated_mb": want, "total_vram_mb": total,
                   "headroom_mb": _HEADROOM_MB, "ok": True, "warning": ""}
         if total is None:
-            return report  # no GPU (CPU/dev) → nothing to check
+            # Say so — on a GPU pod this line appearing means torch can't see
+            # CUDA (driver/arch mismatch), which is itself the finding.
+            log.info("VRAM preflight: no CUDA GPU visible to torch — skipped.")
+            return report
         budget = total - _HEADROOM_MB
         report["ok"] = want <= budget
         lines = "; ".join(f"{n} ~{mb}MB" for n, mb in plan)

@@ -81,6 +81,17 @@ def synth(text: str, voice: str, speed: float) -> bytes:
     t = (text or "").strip()
     if not t:
         return b""
+    # This pipeline is ENGLISH (lang_code='a'); Edge Neural has language-matched
+    # voices (_edge_voice picks a Hindi/Telugu/… voice from the text). A
+    # non-English reply must therefore fall back to Edge — b"" triggers exactly
+    # that in tts_synth.synthesize — or the multilingual voice feature would
+    # come out mangled through an English G2P.
+    try:
+        from app.live.language import detect_language
+        if detect_language(t) != "en":
+            return b""
+    except Exception:  # noqa: BLE001 — detector unavailable → assume English
+        pass
     try:
         pipe = _get_pipeline()
         if pipe is None:

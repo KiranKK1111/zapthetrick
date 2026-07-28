@@ -1154,6 +1154,10 @@ class VoiceSection(BaseModel):
     # seam is a no-op passthrough (today's behaviour). The semantic barge-in +
     # echo-reference guard work regardless.
     native_aec: bool = False
+    # Flow 1: which engine serves the duplex voice contract. "staged" (default)
+    # = segmenter→STT→agent→Kokoro streamed over the socket; "omni" = a
+    # registered speech-native model (app/live/s2s.py) behind the SAME frames.
+    s2s_engine: str = "staged"
     # Which neural TTS engine voices the answer: "edge" = Edge Neural (free,
     # key-less; the local/dev default), "kokoro" = the on-GPU-pod engine (falls
     # back to edge when the pod engine isn't registered). §10.5.
@@ -1463,6 +1467,10 @@ class RoutingSection(BaseModel):
     # the perceived-health window) into the score, so genuinely fast models win
     # latency-sensitive turns instead of relying on the static speed_rank guess.
     # `latency_weight` is the additive term weight (0 → today's ranking).
+    # Flow 2 (2026-07-28): live turns pin the ON-POD local model for a
+    # guaranteed sub-second first token; escalation/verify retries still go to
+    # cloud (they bypass the pin). No-op when no local floor is enabled.
+    live_local_first: bool = True
     latency_aware: bool = False
     latency_weight: float = 0.0
     # A turn slower than this (seconds, p50) is treated as fully "slow" for the
@@ -1860,6 +1868,11 @@ class LiveSection(BaseModel):
     # deterministically-built event. Ambiguous utterances still take the full
     # LLM typing path.
     fast_question_path: bool = True
+    # Run the fast path even when domain context (a resume) is loaded — the
+    # deterministic transcript repair has already fixed mis-heard terms, so a
+    # clean '?'-terminal question skips the LLM-cleaner round trip (seconds on
+    # free tiers). False restores clean-everything-first.
+    fast_path_with_domain: bool = True
     # SPECULATIVE ANSWERING: when a streaming PARTIAL already reads as a
     # complete question, start the answer DURING the end-of-speech silence
     # with its frames buffered; flush instantly when the final transcript
@@ -2190,6 +2203,10 @@ class LiveSection(BaseModel):
     # B4: detect interviewer/candidate crosstalk (both channels voiced) on the
     # dual-source path and flag the masked question. Heuristic, dual-source only.
     overlap_detection: bool = True
+    # Addressee veto: skip interviewer utterances aimed at a CO-PANELIST /
+    # logistics ("questions for the candidate?"), not at the candidate.
+    # Semantic gate `addressed_elsewhere`; fail-open without the embedder.
+    addressee_gate: bool = True
 
     # Capture/answering mode DEFAULT when the client sends no `mode` on connect.
     # False → "standard" (real interview: answer the interviewer only, absorb the

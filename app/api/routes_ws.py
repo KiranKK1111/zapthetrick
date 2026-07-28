@@ -547,6 +547,51 @@ async def voice_ws(
                                      prompt_provider=_voice_bias_prompt,
                                      on_stt_status=_on_stt_status,
                                      on_speech_start=_on_speech_start)
+
+    # DUPLEX AUDIO-OUT (Flow 1, 2026-07-28): the client sends
+    # {"type":"speak","seq":n,"text":...} chunks and receives synthesized audio
+    # back over THIS socket — {"type":"audio","seq","gen"} JSON immediately
+    # followed by a binary MP3 frame. Synthesis runs ON the pod (Kokoro →
+    # Edge fallback via tts_synth), replacing the old per-sentence HTTP POST →
+    # temp file → new player round trip. Barge-in: {"type":"stop_speaking"}
+    # bumps the GENERATION and drains the queue, so any in-flight or queued
+    # chunk from the interrupted reply is dropped — audio stops arriving
+    # immediately, matching the doc's "cancel remaining speech generation".
+    # A speech-native engine (app/live/s2s.py) later replaces what feeds this
+    # queue; the frames — and the FE — stay identical.
+    _speak_q: asyncio.Queue = asyncio.Queue()
+    _speak_gen = {"n": 0}
+
+    async def _speak_worker() -> None:
+        while True:
+            seq, gen, text = await _speak_q.get()
+            if gen != _speak_gen["n"]:
+                continue  # from a barged-in (stale) reply — drop silently
+            audio = b""
+            try:
+                from app.live import tts_synth
+                audio = await tts_synth.synthesize(text)
+            except Exception:  # noqa: BLE001
+                audio = b""
+            if gen != _speak_gen["n"]:
+                continue  # barged in while synthesizing — never play stale audio
+            try:
+                if audio:
+                    # Meta + binary under ONE lock hold so no other frame can
+                    # interleave between them (the FE pairs them by order).
+                    async with _send_lock:
+                        await websocket.send_json(
+                            {"type": "audio", "seq": seq, "gen": gen,
+                             "bytes": len(audio)})
+                        await websocket.send_bytes(bytes(audio))
+                else:
+                    # Honest failure → the FE falls back to its HTTP TTS path
+                    # for this chunk instead of silently losing speech.
+                    await _send({"type": "speak_error", "seq": seq, "gen": gen})
+            except Exception:  # noqa: BLE001 — socket closing; loop exits via cancel
+                pass
+
+    _speak_task = asyncio.create_task(_speak_worker())
     await _send({"type": "ready"})
     try:
         while True:
@@ -576,11 +621,29 @@ async def voice_ws(
                     # Playback state (3): while true, a finalized transcript is
                     # semantically classified interrupt-vs-backchannel.
                     _speaking["on"] = bool(ctrl.get("value"))
+                elif _t == "speak":
+                    # Duplex audio-out: queue a chunk for on-pod synthesis.
+                    _txt = str(ctrl.get("text") or "").strip()
+                    if _txt:
+                        _speak_q.put_nowait((int(ctrl.get("seq") or 0),
+                                             _speak_gen["n"], _txt))
+                elif _t == "stop_speaking":
+                    # Barge-in: invalidate the generation + drain the queue —
+                    # nothing from the interrupted reply reaches the speaker.
+                    _speak_gen["n"] += 1
+                    while not _speak_q.empty():
+                        try:
+                            _speak_q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    await _send({"type": "speech_stopped",
+                                 "gen": _speak_gen["n"]})
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001
         pass
     finally:
+        _speak_task.cancel()
         try:
             await segmenter.flush()
         except Exception:  # noqa: BLE001
@@ -809,10 +872,15 @@ async def live_listen(
         # paraphrasing the answer we just showed — that voice is NOT a new
         # question, so skip it instead of transcribing + re-answering. Audio
         # only (typed input is deliberate); fully fail-open.
-        if (is_audio and not solo_mode
-                and getattr(cfg.live, "candidate_echo_skip", False)):
-            # SOLO mode disables this: the tester's single voice both asks and
-            # reads answers aloud, so echo-matching would suppress real questions.
+        if is_audio and getattr(cfg.live, "candidate_echo_skip", False):
+            # Applies in SOLO too (2026-07-28): this check is CONTENT-based —
+            # `is_candidate_echo` matches the utterance against the DISPLAYED
+            # answer text, not against who spoke. A real question can't be ~72%
+            # similar to a long shown answer, so it never suppresses real
+            # questions; but the solo tester READING the answer aloud matches
+            # exactly, which used to get transcribed and re-answered as a new
+            # prompt. (The ROLE-based candidate-absorb below stays solo-gated —
+            # that one would wrongly swallow the single test voice.)
             try:
                 from app.live import echo as _echo
                 _ethr = float(
@@ -850,6 +918,31 @@ async def live_listen(
             except Exception:  # noqa: BLE001 — never drop a real question
                 pass
 
+        # ADDRESSEE veto (2026-07-28): the interviewer talking to a CO-PANELIST
+        # ("do you have any questions for the candidate?", "can you pull up his
+        # resume?") is a perfectly-shaped question that is NOT the candidate's
+        # turn — answering it answers someone else's conversation. Semantic
+        # (exemplar-embedding) with a margin against candidate-directed
+        # questions; fail-open, audio-only (typed input is deliberate).
+        if is_audio and getattr(cfg.live, "addressee_gate", True):
+            try:
+                from app.live.implicit import addressed_elsewhere
+                if addressed_elsewhere(utterance):
+                    await send({"type": "done", "qid": qid,
+                                "skipped": "addressed_elsewhere"})
+                    await send({"type": "skipped", "qid": qid,
+                                "text": utterance,
+                                "reason": "addressed_elsewhere"})
+                    try:
+                        from app.live import ledger as _aled
+                        _aled.record(sid or "", qid, utterance, _aled.SKIPPED,
+                                     reason="addressed_elsewhere")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+            except Exception:  # noqa: BLE001 — never drop a real question
+                pass
+
         # Domain context for STT question repair: the resume skills, target role
         # + JD, and recent topics let the cleaner confidently fix mis-heard
         # technical terms ("Q proxy" -> "kube-proxy", "spring" -> "string").
@@ -873,11 +966,18 @@ async def live_listen(
         #    token becomes the only remaining LLM wait. Anything ambiguous
         #    falls through to the full LLM typing below.
         event = None
-        # When domain repair is available, skip the fast (no-cleanup) path so the
-        # question flows through the domain-aware cleaner and mis-transcriptions
-        # get fixed. Falls back to the fast path when there's no domain context.
+        # 2026-07-28 LATENCY: the fast path used to be skipped whenever domain
+        # context existed (any resume loaded — the NORMAL case), sending every
+        # question through the LLM cleaner first: seconds of extra wait per
+        # answer on free tiers. The deterministic domain-term repair
+        # (transcript_repair, above) has already fixed mis-heard terms by this
+        # point, so a clean '?'-terminal high-confidence question goes straight
+        # to generation; the LLM cleaner still handles everything ambiguous.
+        # `fast_path_with_domain: false` restores the old always-clean behavior.
+        _fast_ok = (not _domain
+                    or getattr(cfg.live, "fast_path_with_domain", True))
         if (getattr(cfg.live, "fast_question_path", True)
-                and not _domain
+                and _fast_ok
                 and utterance.rstrip().endswith("?")):
             try:
                 from app.live import events as _live_events

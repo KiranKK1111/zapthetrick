@@ -97,6 +97,19 @@ def holds_floor(t: str) -> bool:
         return False
 
 
+def addressed_elsewhere(t: str) -> bool:
+    """True when the utterance is the interviewer speaking to a CO-PANELIST /
+    handling logistics ("do you have any questions for the candidate?") rather
+    than to the candidate — a perfectly-shaped question that is NOT our turn.
+    Lives HERE (not in the api layer) so the semantic call flows through the
+    allowed live→semantics edge; fail-open → False without the embedder."""
+    try:
+        from app.semantics import gates as _gates
+        return _gates.matches("addressed_elsewhere", t) is True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _semantic_signal(gate: str, t: str) -> ImplicitSignal | None:
     """ImplicitSignal from an exemplar-embedding gate; None when the gate has
     no opinion (embedder warming/absent) or says no."""

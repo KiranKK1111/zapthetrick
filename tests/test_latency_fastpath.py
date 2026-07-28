@@ -42,9 +42,22 @@ def test_settle_collapses_for_vad_confirmed_complete():
 
 def test_settle_short_for_vad_confirmed_neutral():
     buf = HypothesisBuffer(settle_ms=600)
-    # No terminal punctuation, tail is not grammatically dangling → neutral.
-    buf.add("Tell me about your Kafka experience", now=0.0, has_audio=True)
+    # No terminal punctuation, NOT question-led, tail not dangling → neutral.
+    # (A statement-shaped utterance: the interrogative-lead upgrade must not
+    # touch it, so the audio-collapse short window still applies.)
+    buf.add("My last project used Kafka streams", now=0.0, has_audio=True)
     assert buf.required_settle_ms() == 250
+
+
+def test_settle_zero_for_vad_confirmed_complete_imperative():
+    buf = HypothesisBuffer(settle_ms=600)
+    # 2026-07-28 semantic-completion upgrade: "Tell me about your Kafka
+    # experience" is a COMPLETE question the ASR left un-'?'-ed (interrogative
+    # lead + closed object). VAD already confirmed the silence gap, so the
+    # settle collapses to ZERO — it answers immediately, not after 250ms.
+    # (Previously classified neutral → 250; the change is the SPEEDUP.)
+    buf.add("Tell me about your Kafka experience", now=0.0, has_audio=True)
+    assert buf.required_settle_ms() == 0
 
 
 def test_settle_unchanged_for_text_fragments():
@@ -52,8 +65,14 @@ def test_settle_unchanged_for_text_fragments():
     com = HypothesisBuffer(settle_ms=600)
     com.add("How would you scale Kafka?", now=0.0)
     assert com.required_settle_ms() == 360
+    # An un-'?'-ed imperative question now classifies COMPLETE (interrogative
+    # lead, 2026-07-28) → the same fast text-settle as the '?' form above.
+    imp = HypothesisBuffer(settle_ms=600)
+    imp.add("Tell me about your Kafka experience", now=0.0)
+    assert imp.required_settle_ms() == 360
+    # A genuinely NEUTRAL statement keeps the full window.
     neu = HypothesisBuffer(settle_ms=600)
-    neu.add("Tell me about your Kafka experience", now=0.0)
+    neu.add("My last project used Kafka streams", now=0.0)
     assert neu.required_settle_ms() == 600
 
 

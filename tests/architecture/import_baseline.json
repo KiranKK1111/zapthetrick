@@ -4,6 +4,7 @@
   "(root) -> api",
   "(root) -> capabilities",
   "(root) -> core",
+  "(root) -> live",
   "(root) -> llm",
   "(root) -> mcp",
   "(root) -> middleware",

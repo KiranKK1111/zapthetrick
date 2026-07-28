@@ -337,8 +337,24 @@ async def answer_question(
 
 
 def _live_model() -> str | None:
-    """The pinned fast answer model for live interviews (cfg.llm.live_model),
-    or None to use the normal auto-router chain."""
+    """The pinned fast answer model for live interviews, or None for the normal
+    auto-router chain.
+
+    LOCAL-FIRST (Flow 2, 2026-07-28): when the on-pod local floor is enabled and
+    `routing.live_local_first` is on, live turns pin the LOCAL model — first
+    token in ~100-300ms with the prompt cache, no rate limits, no network. Cloud
+    remains the QUALITY path: escalation/verify retries pass `escalate=True`,
+    which bypasses this pin entirely (see the call site), and a dead local
+    server falls back down the normal chain. Without a local floor this is a
+    no-op and `cfg.llm.live_model` behaves exactly as before."""
+    try:
+        from app.llm.catalog import local_enabled, local_model_id
+        if (bool(getattr(getattr(cfg, "routing", None),
+                         "live_local_first", True))
+                and local_enabled()):
+            return local_model_id()
+    except Exception:  # noqa: BLE001 — fail-open to the configured pin
+        pass
     m = getattr(cfg.llm, "live_model", None)
     return m.strip() if isinstance(m, str) and m.strip() else None
 

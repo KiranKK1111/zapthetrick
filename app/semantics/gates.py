@@ -173,6 +173,42 @@ GATES: dict[str, dict] = {
     # answering here talks over the interviewer instead of responding to them.
     # The discriminator is direction — the speaker offering to talk / needing a
     # beat, vs asking the listener to talk.
+    # The interviewer speaking to a CO-PANELIST / handling logistics — not to
+    # the candidate. "Do you have any questions for the candidate?" is aimed at
+    # a colleague even though it's a perfectly-shaped question; answering it
+    # answers someone else's turn. The discriminator is third-person references
+    # to the candidate + panel/logistics framing vs second-person questions TO
+    # the candidate. Used as a VETO before answering (addressee detection —
+    # the piece of "was that aimed at the candidate?" a duplex model can't do
+    # for two other people).
+    "addressed_elsewhere": {
+        "threshold": 0.60,
+        "positives": [
+            "do you have any questions for the candidate",
+            "can you pull up the candidate's resume",
+            "shall we move him to the next round",
+            "let's give her a minute and come back to this",
+            "can you share the next question with me",
+            "do we have time for one more question",
+            "let me hand it over to my colleague now",
+            "anything you want to ask from your side",
+            "we can discuss his answer after the call",
+            "are you taking notes on this one",
+            "should we schedule the second round for him",
+            "let's wrap up and compare feedback later",
+        ],
+        "negatives": [
+            "can you share your screen",
+            "do you have any questions for us",
+            "can you walk me through your resume",
+            "tell me about your current project",
+            "what would you like to know about the team",
+            "shall we start with your introduction",
+            "can you hear me okay",
+            "how would you scale this system",
+            "do you have experience with kafka",
+        ],
+    },
     "speaker_holds_floor": {
         "threshold": 0.60,
         "positives": [

@@ -160,14 +160,14 @@ code_solver:
   structured_extraction: false
   selected_language_min_conf: 0.7
   fingerprint_cache: false
-  toolchain_prefetch: false
+  toolchain_prefetch: true
   patch_edits: false
-  verify_chat_code: false
+  verify_chat_code: true
   verify_chat_max_repairs: 2
   verify_chat_deadline_s: 180.0
 chat:
-  fast_lane: false
-  input_warmup: false
+  fast_lane: true
+  input_warmup: true
   interpretation: true
   variation_engine: true
 web_search:
@@ -374,7 +374,7 @@ documents:
   table_of_contents: true
   excel_charts: true
   explicit_only: true
-  deliverable_engine: false
+  deliverable_engine: true
   visual_qa: false
   typst: false
   typst_bin: ''
@@ -391,7 +391,7 @@ documents:
   quality_strict: false
   llm_review: false
   model_driven_render: true
-  sandbox_render: false
+  sandbox_render: true
   verify_coverage_min: 0.6
   diff_edits: true
   preview_panel: true
@@ -427,6 +427,10 @@ voice:
   # GPU-local synthesis on the pod (no Microsoft round-trip per sentence).
   # Automatically degrades to 'edge' when the Kokoro runtime isn't present.
   tts_engine: kokoro
+  # Flow 1: engine behind the duplex voice contract. "staged" = STT→LLM→Kokoro
+  # streamed over the socket (today); "omni" = a registered speech-native model
+  # (app/live/s2s.py) behind the same frames — flip only once one is deployed.
+  s2s_engine: staged
   loop: false
   wake_word: false
   conversational_intel: true
@@ -489,6 +493,9 @@ resilience:
 routing:
   route_all_models: true
   prefer_free: true
+  # Flow 2: live answers pin the on-pod local model (sub-second first token);
+  # escalation/verify retries still use the cloud chain.
+  live_local_first: true
   strong_tier_for_hard: false
   strong_tier_difficulties:
   - expert
