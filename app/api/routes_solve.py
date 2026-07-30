@@ -42,6 +42,52 @@ class SolveTextRequest(BaseModel):
     """Body for POST /api/solve/text."""
     problem: str = Field(..., min_length=1)
     language: str | None = None
+    # The OPEN chat conversation to record this exchange into (question +
+    # answer as normal messages). None → recorded into a NEW conversation
+    # whose id rides the `done` frame so the client adopts it.
+    conversation_id: str | None = None
+
+
+async def _persist_to_chat(conversation_id: str | None,
+                           problem: str, answer: str) -> str | None:
+    """Record the solve exchange into the user's CHAT history — the captured
+    problem as the user message, the solution as the assistant message — so a
+    Solve lives in the same conversation the user had open (reload-safe),
+    exactly like a typed question. Creates a conversation when none is open.
+    Fail-open: a DB hiccup never harms the already-streamed answer."""
+    import logging
+    log = logging.getLogger(__name__)
+    if not (answer or "").strip():
+        return None
+    factory = get_session_factory()
+    if factory is None:
+        return None
+    try:
+        from storage.models import Conversation, Message
+        async with factory() as session:
+            convo = None
+            if conversation_id:
+                try:
+                    convo = await session.get(
+                        Conversation, uuid.UUID(str(conversation_id)))
+                except (ValueError, TypeError):
+                    convo = None
+            if convo is None:
+                title = (" ".join((problem or "Solve")[:200].split()[:6])[:200]
+                         or "Solve")
+                convo = Conversation(title=title)
+                session.add(convo)
+                await session.flush()
+            session.add(Message(conversation_id=convo.id, role="user",
+                                content=(problem or
+                                         "(screenshot problem)")[:16000]))
+            session.add(Message(conversation_id=convo.id, role="assistant",
+                                content=answer[:64000]))
+            await session.commit()
+            return str(convo.id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("solve chat persist skipped: %s", exc)
+        return None
 
 
 def _json_default(o):
@@ -222,7 +268,10 @@ async def solve_text(body: SolveTextRequest) -> StreamingResponse:
                 description=body.problem, response=_cached, source="text",
                 language=body.language,
                 latency_ms=int(time.time() * 1000) - started_ms)
-            yield _sse("done", {"solve_id": solve_id, "cached": True})
+            _cid = await _persist_to_chat(
+                body.conversation_id, body.problem, _cached)
+            yield _sse("done", {"solve_id": solve_id, "cached": True,
+                                "conversation_id": _cid})
             return
 
         collected: list[str] = []
@@ -269,6 +318,18 @@ async def solve_text(body: SolveTextRequest) -> StreamingResponse:
         except Exception:  # noqa: BLE001
             pass
 
+        # MermaidDiagramVisualizations.md #1 (model half): re-derive a diagram as
+        # structured IR and generate from that. Off by default — `plan_answer`
+        # returns immediately then, so this costs nothing unless switched on. Runs
+        # BEFORE the solution cache below so a cached hit replays the planned
+        # diagram instead of re-planning it on every identical ask.
+        try:
+            from app.diagrams.lane import plan_answer as _plan_diagrams
+            full_response = await _plan_diagrams(
+                full_response, request=body.problem) or full_response
+        except Exception:  # noqa: BLE001
+            pass
+
         # §3.2 cache the fresh solution so the next identical ask is instant.
         try:
             from app.solve import fingerprint as _fp
@@ -284,7 +345,9 @@ async def solve_text(body: SolveTextRequest) -> StreamingResponse:
             language=body.language,
             latency_ms=int(time.time() * 1000) - started_ms,
         )
-        yield _sse("done", {"solve_id": solve_id})
+        _cid = await _persist_to_chat(
+            body.conversation_id, body.problem, full_response)
+        yield _sse("done", {"solve_id": solve_id, "conversation_id": _cid})
 
     return StreamingResponse(
         gen(),
@@ -304,6 +367,7 @@ async def solve_image(
     extra_context: str | None = Form(default=None),
     vision_model: str | None = Form(default=None),
     code_model: str | None = Form(default=None),
+    conversation_id: str | None = Form(default=None),
 ) -> StreamingResponse:
     """Stream a solution from a screenshot. Persists a `solve_sessions`
     row that carries the OCR-extracted problem text + the streamed
@@ -442,6 +506,18 @@ async def solve_image(
                     )
         except Exception:  # noqa: BLE001
             pass
+
+        # MermaidDiagramVisualizations.md #1 (model half), same as the text path
+        # above: `finalize` already ran the deterministic compile lane; this
+        # re-derives a diagram as structured IR when that could not clean it up.
+        # Off by default, so `plan_answer` returns immediately.
+        try:
+            from app.diagrams.lane import plan_answer as _plan_diagrams
+            response_text = await _plan_diagrams(
+                response_text, request=description) or response_text
+        except Exception:  # noqa: BLE001
+            pass
+
         solve_id = await _persist_solve(
             description=description,
             response=response_text,
@@ -452,7 +528,9 @@ async def solve_image(
             code_model=code_model,
             latency_ms=int(time.time() * 1000) - started_ms,
         )
-        yield _sse("done", {"solve_id": solve_id})
+        _cid = await _persist_to_chat(conversation_id, description,
+                                      response_text)
+        yield _sse("done", {"solve_id": solve_id, "conversation_id": _cid})
 
     return StreamingResponse(
         gen(),

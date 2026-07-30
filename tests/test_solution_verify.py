@@ -24,6 +24,42 @@ class TestExtractExamples:
         assert sv.extract_examples("just some prose") == []
         assert sv.extract_examples("") == []
 
+    def test_call_arrow_format_codingbat(self):
+        # CodingBat-style examples: `name(args) → result` lines, no
+        # Input/Output blocks at all. Before the arrow fallback these
+        # extracted ZERO examples → the sandbox harness had nothing to check.
+        text = ("Given a list of integers, return a list of those numbers "
+                "squared and the product added to 10, omitting any of the "
+                "resulting numbers that end in 5 or 6.\n"
+                "square56([3, 1, 4]) → [19, 11]\n"
+                "square56([1]) → [11]\n"
+                "square56([2]) → [14]\n")
+        ex = sv.extract_examples(text)
+        assert len(ex) == 3
+        assert ex[0]["input"] == "[3, 1, 4]"
+        assert ex[0]["expected"] == "[19, 11]"
+        assert ex[0]["input_raw"] == "square56([3, 1, 4])"
+        assert ex[2]["expected"] == "[14]"
+
+    def test_call_arrow_ascii_and_multi_arg(self):
+        text = ("sumDigits(\"aa1bc2d3\") -> 6\n"
+                "blackjack(19, 21) -> 21\n")
+        ex = sv.extract_examples(text)
+        assert len(ex) == 2
+        assert ex[0]["input"] == '"aa1bc2d3"'
+        assert ex[0]["expected"] == "6"
+        assert ex[1]["input"] == "19, 21"
+        assert ex[1]["input_raw"] == "blackjack(19, 21)"
+
+    def test_input_output_blocks_win_over_arrow_lines(self):
+        # When a problem has real Input/Output blocks, prose containing a stray
+        # `f(x) -> y` must not add bogus examples.
+        text = ("Input: nums = [1,2]\nOutput: 3\n"
+                "Note: think of it as add(1, 2) -> 3 conceptually.")
+        ex = sv.extract_examples(text)
+        assert len(ex) == 1
+        assert ex[0]["input"] == "nums = [1,2]"
+
     def test_skips_input_output_format_section_headers(self):
         # The HackerRank currency-formatter bug: "Input Format" / "Output Format"
         # section headers were parsed as an example, grabbing the prose "On the

@@ -137,10 +137,14 @@ async def export_all(session: AsyncSession, *, user_id) -> dict:
             "id": str(s.id), "title": s.title, "type": s.type,
             "project_id": str(s.project_id) if s.project_id else None,
             "kg": (s.session_metadata or {}).get("kg"),
+            # Timestamps travel so a re-import (and the human reading the
+            # exported file) keeps the thread in its original order.
+            "started_at": s.started_at.isoformat() if s.started_at else None,
         } for s in sessions],
         "messages": [{
             "id": str(m.id), "conversation_id": str(m.session_id),
             "role": m.role, "content": m.content, "intent": m.intent,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
         } for m in messages],
         "episodes": [{
             "id": str(e.id), "session_tag": e.session_tag,
@@ -162,6 +166,190 @@ async def export_all(session: AsyncSession, *, user_id) -> dict:
             "projects": len(projects),
         },
     }
+
+
+# ---- import (the mirror of export-all) -----------------------------------
+
+#: Section names a caller may ask to import. `chat_sessions` / `live_sessions`
+#: are the two halves of `conversations`, split on `Session.type`, because that
+#: is the choice users actually make ("bring my Live history over, not my
+#: chats"). `memories` covers episodes + skills — they are one concept to a user.
+IMPORT_SECTIONS = ("chat_sessions", "live_sessions", "projects", "memories")
+
+
+def sections_in_bundle(bundle: dict) -> dict[str, int]:
+    """What an export bundle actually contains, as `{section: row count}`.
+
+    Pure — the API exposes it so the client can offer only the checkboxes that
+    would do something, and the importer uses it for its result summary.
+    Unknown/garbage input yields all-zero counts rather than raising."""
+    b = bundle if isinstance(bundle, dict) else {}
+    convos = [c for c in (b.get("conversations") or []) if isinstance(c, dict)]
+    live = [c for c in convos if str(c.get("type") or "chat") == "live"]
+    chat = [c for c in convos if str(c.get("type") or "chat") != "live"]
+    memories = len([e for e in (b.get("episodes") or []) if isinstance(e, dict)]) \
+        + len([s for s in (b.get("skills") or []) if isinstance(s, dict)])
+    return {
+        "chat_sessions": len(chat),
+        "live_sessions": len(live),
+        "projects": len([p for p in (b.get("projects") or [])
+                         if isinstance(p, dict)]),
+        "memories": memories,
+    }
+
+
+def _parse_dt(v):
+    """Best-effort ISO-8601 → aware datetime. None/garbage → None (the column
+    default then supplies `now()`)."""
+    if not v:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+async def import_bundle(
+    session: AsyncSession,
+    *,
+    user_id,
+    bundle: dict,
+    sections: list[str] | tuple[str, ...] | None = None,
+) -> dict:
+    """Add the contents of an export bundle to this user's data.
+
+    ADDITIVE by design: every row is inserted under a FRESH id and owned by
+    `user_id`, so importing never overwrites (or silently merges into) something
+    the user already has — the failure mode of an id-preserving import is losing
+    live data to a stale file, which is unrecoverable. Duplicates are visible and
+    deletable; clobbered history is not.
+
+    Ids inside the bundle are used only to re-link the graph: message →
+    conversation, and conversation/episode → project.
+
+    Returns `{"imported": {...counts...}, "skipped": {...}}`.
+    """
+    uid = _as_uuid(user_id)
+    b = bundle if isinstance(bundle, dict) else {}
+    wanted = set(sections or IMPORT_SECTIONS)
+    unknown = sorted(wanted - set(IMPORT_SECTIONS))
+    wanted &= set(IMPORT_SECTIONS)
+
+    counts = {k: 0 for k in IMPORT_SECTIONS}
+    counts["messages"] = 0
+
+    # Projects first — conversations and episodes reference them.
+    project_map: dict[str, uuid.UUID] = {}
+    if "projects" in wanted:
+        for p in (b.get("projects") or []):
+            if not isinstance(p, dict):
+                continue
+            name = str(p.get("name") or "Imported project").strip() \
+                or "Imported project"
+            row = ProjectRow(
+                user_id=uid,
+                name=name,
+                instructions=(p.get("instructions") or None),
+                project_metadata={"kg": p.get("kg")} if p.get("kg") else {},
+            )
+            session.add(row)
+            await session.flush()
+            if p.get("id"):
+                project_map[str(p["id"])] = row.id
+            counts["projects"] += 1
+
+    want_chat = "chat_sessions" in wanted
+    want_live = "live_sessions" in wanted
+    session_map: dict[str, uuid.UUID] = {}
+    if want_chat or want_live:
+        for c in (b.get("conversations") or []):
+            if not isinstance(c, dict):
+                continue
+            kind = str(c.get("type") or "chat")
+            is_live = kind == "live"
+            if is_live and not want_live:
+                continue
+            if not is_live and not want_chat:
+                continue
+            row = SessionRow(
+                user_id=uid,
+                type=kind,
+                title=str(c.get("title") or "Imported session"),
+                project_id=project_map.get(str(c.get("project_id") or "")),
+                session_metadata={"kg": c.get("kg")} if c.get("kg") else {},
+            )
+            started = _parse_dt(c.get("started_at"))
+            if started is not None:
+                row.started_at = started
+            session.add(row)
+            await session.flush()
+            if c.get("id"):
+                session_map[str(c["id"])] = row.id
+            counts["live_sessions" if is_live else "chat_sessions"] += 1
+
+        # Messages follow their conversation; ones whose conversation wasn't
+        # imported (unselected half, or a bundle missing the parent) are dropped.
+        orphans = 0
+        for m in (b.get("messages") or []):
+            if not isinstance(m, dict):
+                continue
+            parent = session_map.get(str(m.get("conversation_id") or ""))
+            if parent is None:
+                orphans += 1
+                continue
+            content = m.get("content")
+            if content is None:
+                orphans += 1
+                continue
+            row = MessageRow(
+                session_id=parent,
+                role=str(m.get("role") or "user")[:20],
+                content=str(content),
+                intent=(str(m["intent"])[:50] if m.get("intent") else None),
+            )
+            created = _parse_dt(m.get("created_at"))
+            if created is not None:
+                row.created_at = created
+            session.add(row)
+            counts["messages"] += 1
+        counts["orphan_messages"] = orphans
+
+    if "memories" in wanted:
+        for e in (b.get("episodes") or []):
+            if not isinstance(e, dict):
+                continue
+            session.add(EpisodeRow(
+                user_id=uid,
+                session_tag=(e.get("session_tag") or None),
+                project_id=project_map.get(str(e.get("project_id") or "")),
+                question=str(e.get("question") or ""),
+                final=str(e.get("final") or ""),
+                intent=(e.get("intent") or None),
+                feedback=(e.get("feedback") or None),
+            ))
+            counts["memories"] += 1
+        for k in (b.get("skills") or []):
+            if not isinstance(k, dict):
+                continue
+            text = str(k.get("text") or "").strip()
+            if not text:
+                continue
+            row = SkillRow(user_id=uid, text=text,
+                           kind=str(k.get("kind") or "lesson"))
+            if k.get("confidence") is not None:
+                try:
+                    row.confidence = float(k["confidence"])
+                except (TypeError, ValueError):
+                    pass
+            session.add(row)
+            counts["memories"] += 1
+
+    await session.commit()
+    result = {"imported": counts, "available": sections_in_bundle(b)}
+    if unknown:
+        result["ignored_sections"] = unknown
+    return result
 
 
 # ---- delete-all ----------------------------------------------------------
@@ -282,5 +470,5 @@ async def _delete_blobs(paths: list[str]) -> None:
 
 __all__ = [
     "forget_kg_node", "purge_expired", "export_all", "delete_all",
-    "forget_episode",
+    "forget_episode", "import_bundle", "sections_in_bundle", "IMPORT_SECTIONS",
 ]

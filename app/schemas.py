@@ -207,6 +207,9 @@ class AgentsStreamRequest(BaseModel):
     # languages (Hindi, Marathi, …) the reply's self-reference grammar must agree
     # with the speaking voice — passed so the model inflects correctly.
     voice_gender: str | None = None
+    # ADVISORY prosody read of how the user SOUNDED (calm|stressed|rushed|
+    # hesitant) — the reply acknowledges tone, not just words.
+    voice_emotion: str | None = None
 
 
 class FeedbackRequest(BaseModel):

@@ -479,6 +479,29 @@ async def voice_ws(
     # then — a normal listening turn pays no classification latency.
     _speaking = {"on": False}
 
+    def _voice_emotion(t: str, audio) -> str:
+        """Advisory emotion read from cheap prosody proxies (energy + rate +
+        filler ratio) over THIS utterance's audio — so the reply can match the
+        user's tone ("you sound rushed/stressed"). Fail-open → ''."""
+        try:
+            import numpy as np
+            from app.live import emotion as _emo
+            arr = np.asarray(audio, dtype="float32").reshape(-1)
+            if arr.size < 1600:  # <0.1s — nothing to read
+                return ""
+            energy = float(min(1.0, np.sqrt(np.mean(arr * arr)) * 6.0))
+            dur_s = arr.size / 16000.0
+            words = [w for w in t.lower().split() if w]
+            rate = float(min(1.0, (len(words) / dur_s) / 4.0)) if dur_s else 0.0
+            fillers = sum(1 for w in words if w.strip(".,?!") in
+                          ("uh", "um", "hmm", "like", "erm"))
+            fr = fillers / len(words) if words else 0.0
+            sig = _emo.analyze(energy=energy, speech_rate=rate,
+                               filler_ratio=fr)
+            return sig.label if sig.label and sig.label != "neutral" else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
     async def _on_utterance(text: str, full: str | None = None) -> None:
         t = (text or "").strip()
         # First-real-word gate: a lone cough/"uh" that STT rendered as a token
@@ -487,6 +510,9 @@ async def voice_ws(
             _recent_turns.append(t)
             del _recent_turns[:-6]          # keep the tail bounded
             frame = {"type": "transcript", "text": t}
+            _emo_label = _voice_emotion(t, full) if full is not None else ""
+            if _emo_label:
+                frame["emotion"] = _emo_label
             if _speaking["on"]:
                 # SEMANTIC barge-in: is the user taking the floor, or just
                 # following along? Generalizes to paraphrases the client's word
@@ -564,13 +590,16 @@ async def voice_ws(
 
     async def _speak_worker() -> None:
         while True:
-            seq, gen, text = await _speak_q.get()
+            seq, gen, text, voice, speed = await _speak_q.get()
             if gen != _speak_gen["n"]:
                 continue  # from a barged-in (stale) reply — drop silently
             audio = b""
             try:
                 from app.live import tts_synth
-                audio = await tts_synth.synthesize(text)
+                if voice:
+                    audio = await tts_synth.synthesize(text, voice, speed=speed)
+                else:
+                    audio = await tts_synth.synthesize(text, speed=speed)
             except Exception:  # noqa: BLE001
                 audio = b""
             if gen != _speak_gen["n"]:
@@ -622,11 +651,16 @@ async def voice_ws(
                     # semantically classified interrupt-vs-backchannel.
                     _speaking["on"] = bool(ctrl.get("value"))
                 elif _t == "speak":
-                    # Duplex audio-out: queue a chunk for on-pod synthesis.
+                    # Duplex audio-out: queue a chunk for on-pod synthesis. The
+                    # frame carries the user's CHOSEN voice + speed — without
+                    # them the pod spoke the default voice regardless of
+                    # Settings (the "two voices"/wrong-voice report).
                     _txt = str(ctrl.get("text") or "").strip()
                     if _txt:
                         _speak_q.put_nowait((int(ctrl.get("seq") or 0),
-                                             _speak_gen["n"], _txt))
+                                             _speak_gen["n"], _txt,
+                                             str(ctrl.get("voice") or ""),
+                                             float(ctrl.get("speed") or 1.0)))
                 elif _t == "stop_speaking":
                     # Barge-in: invalidate the generation + drain the queue —
                     # nothing from the interrupted reply reaches the speaker.

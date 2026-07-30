@@ -81,6 +81,27 @@ def finalize(
     body = enforce_markdown(body, shape=shape_enum)
     body = polish(body)
 
+    # MermaidDiagramVisualizations.md #1 — recompile every ```mermaid``` fence
+    # from its own structure with the deterministic IR generator, so a diagram the
+    # MODEL wrote gets the same guarantees as one the generator produced (quoted
+    # labels, balanced subgraph/end, legal arrows, a planned layout).
+    #
+    # Runs AFTER enforce_markdown/polish on purpose: those two deliberately leave
+    # fenced blocks untouched, so the diagram this sees is exactly what the client
+    # would have rendered. Heavily gated and fail-open (see `diagrams/lane.py`):
+    # an unmodelled diagram type or an incomplete lift leaves the fence alone.
+    try:
+        from app.diagrams.lane import compile_diagrams
+
+        lane = compile_diagrams(body)
+        body = lane.text
+        if lane.changed:
+            warnings.append(
+                f"{sum(1 for o in lane.outcomes if o.rewritten)} diagram(s) "
+                f"rebuilt from structure")
+    except Exception:  # noqa: BLE001 — never let a compiler pass break a turn
+        pass
+
     artifacts: list[Artifact] = []
     if shape_enum == Shape.ARTIFACT_SET:
         artifacts = split_artifacts(body)

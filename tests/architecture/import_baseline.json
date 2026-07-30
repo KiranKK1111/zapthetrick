@@ -55,6 +55,7 @@
   "api -> codeintel",
   "api -> core",
   "api -> database",
+  "api -> diagrams",
   "api -> documents",
   "api -> eval",
   "api -> followup",
@@ -81,8 +82,8 @@
   "api -> stt",
   "api -> tools",
   "api -> understanding",
-  "api -> vision",
   "api -> verify",
+  "api -> vision",
   "api -> workspace",
   "api -> wsgroup",
   "artifacts -> core",
@@ -129,6 +130,9 @@
   "core -> question_detection",
   "core -> rag",
   "core -> tools",
+  "diagrams -> core",
+  "diagrams -> llm",
+  "diagrams -> response_arch",
   "documents -> capabilities",
   "documents -> core",
   "documents -> obs",
@@ -200,6 +204,7 @@
   "rag -> documents",
   "rag -> obs",
   "response_arch -> core",
+  "response_arch -> diagrams",
   "response_arch -> llm",
   "sandbox -> core",
   "security -> agent_workspace",
@@ -250,5 +255,6 @@
  "_reviewed_2026_07_15_phase6": {
   "chat -> quality": "chat.verify.assess_partial_sections runs quality.stream_controller per streamed section (Phase 6 #9).",
   "response_arch -> llm": "response_arch.structured wraps llm.constrained for structured/JSON outputs (Phase 6 #24)."
- }
+ },
+ "_adr_diagrams": "Edges for the new diagrams package (MermaidDiagramVisualizations.md #1). api -> diagrams: routes_diagrams.py exposes the IR pipeline. diagrams -> core: config_loader only, for the mermaid_elk flag (read fail-closed). diagrams -> llm: constrained.extract_json, to coerce a planner payload offline. diagrams -> response_arch: structured.generate_structured, the ONE model seam (planner + critic) so schema-validated generation is not reimplemented. Deliberately absent: diagrams imports no chat/orchestration/agent package, so the compiler stays usable from any caller. response_arch -> diagrams: `response_arch.layer.finalize` calls the answer-path compile lane (diagrams/lane.py), so every model-written mermaid fence is recompiled from its parsed structure. The direction is deliberate: response_arch (answer shaping) depends on diagrams (the artifact compiler), never the reverse — the compiler stays usable from a route, a document generator or a test with no response-shaping context. The one reverse edge, diagrams -> response_arch, is confined to structured.generate_structured in planner/critic."
 }

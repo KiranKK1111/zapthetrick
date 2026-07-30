@@ -237,16 +237,21 @@ def test_duplex_speak_streams_audio_and_barge_cancels(voice_ws, monkeypatch):
     silences everything queued from the interrupted reply."""
     ws, stt, push = voice_ws
     import app.live.tts_synth as tts_synth
+    calls = []
 
     async def fake_synth(text, voice_id=None, *, speed=1.0):
+        calls.append((text, voice_id, speed))
         return b"MP3:" + text.encode()
 
     monkeypatch.setattr(tts_synth, "synthesize", fake_synth)
 
-    ws.send_json({"type": "speak", "seq": 1, "text": "hello there"})
+    # The user's CHOSEN voice + speed must reach synthesis (the wrong-voice bug).
+    ws.send_json({"type": "speak", "seq": 1, "text": "hello there",
+                  "voice": "nova", "speed": 1.25})
     meta = ws.receive_json()
     assert meta["type"] == "audio" and meta["seq"] == 1
     assert ws.receive_bytes() == b"MP3:hello there"
+    assert calls[-1] == ("hello there", "nova", 1.25)
 
     ws.send_json({"type": "speak", "seq": 2, "text": "second sentence"})
     meta = ws.receive_json()

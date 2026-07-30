@@ -85,6 +85,19 @@ class PersonaAgent(Agent):
         except Exception:  # noqa: BLE001 — personalization must never block a turn
             pass
 
+        # The user's PREFERRED NAME (Profile screen). Without this the field would
+        # be stored and displayed but never actually used — the assistant would
+        # still not know what to call them. Injected next to the custom
+        # instructions so it sits at the same precedence: below safety, above
+        # learned memory. Blank → nothing added.
+        try:
+            from ..personalization.profile import frame_preferred_name
+            _name_block = frame_preferred_name(extras.get("preferred_name"))
+            if _name_block:
+                system_prompt += "\n\n" + _name_block
+        except Exception:  # noqa: BLE001
+            pass
+
         # §17 Projects: project-level instructions, just below the user's own
         # (precedence: safety ▷ user ▷ project ▷ learned memory). Empty → skip.
         try:

@@ -110,7 +110,10 @@ vision:
   qwen_vl_load_8bit: true
   minicpm_model: openbmb/MiniCPM-V-2_6
   use_gpu: true
-  max_new_tokens: 512
+  # CAP, not a target (generation stops at EOS — short outputs pay nothing).
+  # 512 truncated long problem transcriptions mid-examples, which is exactly the
+  # inputs/expected-output section the solver needs.
+  max_new_tokens: 1000
   ocr_enabled: true
   ocr_provider: rapid_ocr
   cache_enabled: true
@@ -369,6 +372,23 @@ response_arch:
   mermaid_lane: true
   mermaid_max_nodes: 60
   mermaid_label_wrap: 24
+  # ELK layout (MermaidDiagramVisualizations.md #5). Needs @mermaid-js/layout-elk
+  # registered client-side, which needs a JS bundling step: the loader is ESM,
+  # code-split into relative chunks, and imports `mermaid` as a bare peer, while
+  # the app's webview loads mermaid as one classic IIFE asset. Turning this on
+  # without that bundle silently falls back to dagre. The deterministic layout
+  # planner (direction, spacing, curve, wrap, crossing-reducing order) runs anyway.
+  mermaid_elk: false
+  # MermaidDiagramVisualizations.md #1: recompile every model-written ```mermaid```
+  # fence from its parsed structure with the deterministic IR generator. Gated to
+  # only touch diagrams it fully understands — see app/diagrams/lane.py.
+  diagram_ir_lane: true
+  # The model half of #1: re-derive a diagram as structured IR and generate from
+  # that. off | repair | always. "repair" spends one model call only on diagrams the
+  # deterministic path could not clean up; "always" re-plans every diagram. A
+  # planned diagram is adopted only when it is measurably better, so turning this on
+  # cannot downgrade a diagram the model already got right.
+  diagram_planner: 'off'
 documents:
   section_numbering: true
   table_of_contents: true

@@ -1644,6 +1644,31 @@ async def chat_upload_stream(
                     return
                 log.info("UPLOAD-DIAG answer recovered: %dch", len(full_text))
 
+            # MermaidDiagramVisualizations.md #1 — put the diagram pipeline on this
+            # path too. This route does NOT run `response_arch.finalize` (where the
+            # lane normally lives), so it is called directly; otherwise an upload
+            # turn would be the one place a diagram skipped the compiler.
+            #
+            # Placement matters and is deliberate: AFTER the empty-answer retry +
+            # escalating-tier fallback above (a RECOVERED answer reassembles
+            # `full_text`, so running earlier would let its diagrams bypass the
+            # lane entirely) and BEFORE the verify-before-reveal block below (which
+            # only swaps code blocks and appends a verdict), so the text that gets
+            # revealed and saved is the compiled one.
+            #   * compile_answer — deterministic: each fence is regenerated from its
+            #     parsed structure, so the generator emits the final syntax.
+            #   * plan_answer   — the model half, OFF by default
+            #     (`response_arch.diagram_planner`); returns immediately when off.
+            try:
+                from app.diagrams.lane import compile_answer, plan_answer
+                full_text = compile_answer(full_text) or full_text
+                # `model_message` is what the model was actually asked (the hidden
+                # `instruction` when present), which is the planner's real intent.
+                full_text = await plan_answer(
+                    full_text, request=model_message) or full_text
+            except Exception:  # noqa: BLE001 — additive; never blocks the answer
+                pass
+
             # Sandbox verification: for an image coding problem with a detected
             # language, COMPILE + RUN the solution against the visible examples
             # and append the verdict (✅ passed N/N / ⚠️ failed / ℹ️ no runtime).

@@ -90,7 +90,33 @@ _VOICE_DIRECTIVE = (
     "- Be human: answer anything — casual talk, advice, emotional support, "
     "technical theory. Never say a topic is 'not your specialty' or out of "
     "scope; just engage and help.\n"
+    "- SOUND like a person, not a narrator: use contractions, and OCCASIONALLY "
+    "open with or weave in a natural spoken interjection where it genuinely "
+    "fits — 'Hmm,', 'Ah,', 'Oh!', 'Right,', 'Okay so' — at most one per reply, "
+    "never formulaic. Short sentences. A comma or an ellipsis… where a person "
+    "would pause for breath. Never stage directions like *laughs* or [pause] — "
+    "only speakable words.\n"
 )
+
+
+def _voice_emotion_note(emotion: str | None) -> str:
+    """A tone-matching directive from the ADVISORY prosody read of the user's
+    voice (calm/stressed/rushed/hesitant) — so the reply acknowledges how they
+    SOUND, not just what they said. Empty for neutral/absent."""
+    e = (emotion or "").strip().lower()
+    if e == "stressed":
+        return ("- THE USER SOUNDS STRESSED. Be calm and reassuring; keep it "
+                "brief and concrete; steady them before details.\n")
+    if e == "rushed":
+        return ("- THE USER SOUNDS RUSHED. Give the answer first, tightly; "
+                "skip preamble entirely.\n")
+    if e == "hesitant":
+        return ("- THE USER SOUNDS UNSURE. Be encouraging and gentle; confirm "
+                "their framing before answering; invite a follow-up.\n")
+    if e == "calm":
+        return ("- The user sounds relaxed — a conversational, unhurried reply "
+                "fits.\n")
+    return ""
 
 
 def _voice_gender_note(gender: str | None) -> str:
@@ -1433,6 +1459,7 @@ async def agents_stream(
         # a gendered-grammar note matching the speaking voice.
         "voice_directive": (_VOICE_DIRECTIVE
                             + _voice_gender_note(getattr(body, "voice_gender", None))
+                            + _voice_emotion_note(getattr(body, "voice_emotion", None))
                             if _is_voice else ""),
         # §10 voice turn flag → the Supervisor runs the persona ONLY (skips the
         # RAG/grounder/critic mesh) for a near-instant spoken reply.
@@ -1541,6 +1568,15 @@ async def agents_stream(
                 getattr(_clar_user, "preferences", None))
             if _ci:
                 extras_base["custom_instructions"] = _ci
+        # The Profile screen's "What should ZapTheTrick call you?" — rides the same
+        # path so the stored name is actually USED, not just displayed back.
+        with contextlib.suppress(Exception):
+            from app.personalization.profile import preferred_name
+            _called = preferred_name(
+                getattr(_clar_user, "name", None),
+                getattr(_clar_user, "preferences", None))
+            if _called:
+                extras_base["preferred_name"] = _called
         # §17 Projects: a conversation in a project gains its project-level
         # instructions + a project-scoped KG. Ungrouped → nothing changes.
         with contextlib.suppress(Exception):
@@ -2571,6 +2607,23 @@ async def agents_stream(
                 except Exception:  # noqa: BLE001
                     pass
 
+                # MermaidDiagramVisualizations.md #1, the MODEL half: re-derive a
+                # diagram as structured IR and generate the Mermaid from THAT,
+                # instead of trusting the fence the model wrote. `finalize` above
+                # already ran the deterministic compile lane (which fixes syntax);
+                # this handles the diagrams it could not clean up.
+                #
+                # OFF by default (`response_arch.diagram_planner`) because it costs
+                # a model round trip — `plan_answer` returns immediately in that
+                # case, so this call site is free unless it's switched on. A planned
+                # diagram is adopted only when it is measurably better.
+                try:
+                    from app.diagrams.lane import plan_answer as _plan_diagrams
+                    full_text = await _plan_diagrams(
+                        full_text, request=user_text) or full_text
+                except Exception:  # noqa: BLE001 — additive; never break the turn
+                    pass
+
                 # Stage-4 §3.1: verify-while-streaming for chat code. The draft
                 # is already on screen (Chat reveals first), so sandbox-verify the
                 # code CONCURRENTLY and append an honest verdict — hot-swapping a
@@ -3383,6 +3436,51 @@ async def data_export(session: AsyncSession = Depends(get_session)) -> dict:
     from storage.device import ensure_device_user
     uid = await ensure_device_user()
     return await export_all(session, user_id=uid)
+
+
+@router.post("/data/import/inspect")
+async def data_import_inspect(body: dict) -> dict:
+    """Report which sections an export bundle contains, without writing anything.
+
+    Body: ``{"bundle": {...}}`` — the `bundle` object of a `.zapexport` file.
+    The client uses this to build its "what do you want to import?" checkboxes,
+    so the answer to "what's in this file" comes from ONE implementation shared
+    with the importer instead of the client guessing."""
+    from app.memory.data_lifecycle import sections_in_bundle
+    bundle = body.get("bundle") if isinstance(body, dict) else None
+    if not isinstance(bundle, dict):
+        raise HTTPException(status_code=400,
+                            detail="Expected a `bundle` object.")
+    return {"available": sections_in_bundle(bundle)}
+
+
+@router.post("/data/import")
+async def data_import(
+    body: dict,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Import an export bundle for the device user (§18) — the mirror of
+    `/data/export`.
+
+    Body: ``{"bundle": {...}, "sections": ["chat_sessions", …]}``. Omitting
+    `sections` imports everything present. Rows are added under fresh ids, so an
+    import never overwrites existing data."""
+    from app.memory.data_lifecycle import IMPORT_SECTIONS, import_bundle
+    from storage.device import ensure_device_user
+    bundle = body.get("bundle") if isinstance(body, dict) else None
+    if not isinstance(bundle, dict):
+        raise HTTPException(status_code=400,
+                            detail="Expected a `bundle` object.")
+    raw = body.get("sections")
+    sections = None
+    if isinstance(raw, list):
+        sections = [str(s) for s in raw]
+        if not any(s in IMPORT_SECTIONS for s in sections):
+            raise HTTPException(status_code=400,
+                                detail="No importable section selected.")
+    uid = await ensure_device_user()
+    return await import_bundle(session, user_id=uid, bundle=bundle,
+                               sections=sections)
 
 
 @router.post("/data/delete-all")

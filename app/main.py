@@ -98,9 +98,11 @@ from app.api.routes_attachments import router as attachments_router
 from app.api.routes_blob import router as blob_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_chat_agent import router as chat_agent_router
+from app.api.routes_diagrams import router as diagrams_router
 from app.api.routes_documents import router as documents_router
 from app.api.routes_eval import router as eval_router
 from app.api.routes_mcp import router as mcp_router
+from app.api.routes_mermaid import router as mermaid_router
 from app.api.routes_messages import router as messages_router
 from app.api.routes_prefetch import router as prefetch_router
 from app.api.routes_projects import router as projects_router
@@ -613,6 +615,8 @@ app.include_router(live_router)
 app.include_router(agents_router)
 app.include_router(projects_router)
 app.include_router(mcp_router)
+app.include_router(mermaid_router)
+app.include_router(diagrams_router)
 app.include_router(workspace_router)
 app.include_router(providers_router)
 app.include_router(messages_router)

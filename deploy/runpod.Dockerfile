@@ -119,6 +119,12 @@ RUN CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=80 -DGGML_NATIVE=OFF -
 #    NOTE: this image now contains your source — publish it to a PRIVATE registry.
 COPY . /opt/zapthetrick_be
 
+# Precompile bytecode so a fresh container doesn't spend its first ~30-60s
+# compiling the whole app tree on import — the port binds sooner, which is
+# what RunPod's "Ready" probe needs to catch a live port instead of latching
+# the "Initializing… taking longer than expected" banner during boot.
+RUN "$VENV/bin/python" -m compileall -q /opt/zapthetrick_be/app || true
+
 EXPOSE 8888 22
 
 # 7) Runtime init: env→config, Postgres restore, services under supervisor.

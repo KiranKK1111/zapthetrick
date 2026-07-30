@@ -65,6 +65,30 @@ mkdir -p /workspace "$HF_HOME" "$BACKUP_DIR"
 echo "==> ssh"
 (service ssh start 2>/dev/null || /usr/sbin/sshd 2>/dev/null || true)
 
+# ---- 0b) native accounts — a PERSISTENT signing secret on the volume --------
+# Without a secret `auth_mode()` infers "off", the app sees a server with no
+# accounts and falls back to its device-local stub ("No local account for this
+# email"), with no Google button. Generating the secret here (and exporting it
+# as an env var, which beats config) fixes EXISTING volumes too — the
+# config.yaml render below only runs on first boot.
+#
+# The secret lives on the volume, so it survives pod recreation: a 30-day login
+# token stays valid even when the pod URL changes.
+AUTH_SECRET_FILE="/workspace/auth_secret"
+if [ -z "${ZAPTHETRICK_AUTH_SECRET:-}" ]; then
+  if [ ! -s "$AUTH_SECRET_FILE" ]; then
+    echo "==> generating a native auth secret (first time on this volume)"
+    "$VENV/bin/python" -c "import secrets;print(secrets.token_urlsafe(48))" \
+      > "$AUTH_SECRET_FILE"
+    chmod 600 "$AUTH_SECRET_FILE"
+  fi
+  ZAPTHETRICK_AUTH_SECRET="$(cat "$AUTH_SECRET_FILE")"
+fi
+export ZAPTHETRICK_AUTH_SECRET
+export ZAPTHETRICK_AUTH_MODE="${ZAPTHETRICK_AUTH_MODE:-native}"
+# Sign-in required to use the pod unless the operator opts out.
+export ZAPTHETRICK_AUTH_ENFORCE="${ZAPTHETRICK_AUTH_ENFORCE:-1}"
+
 # ---- 1) config.yaml on the volume — rendered from env once, then preserved ---
 if [ ! -f "$CFG" ]; then
   echo "==> rendering $CFG from env (first boot on this volume)"
@@ -271,7 +295,7 @@ stderr_logfile=/workspace/dragonfly.log
 [program:app]
 command=${VENV}/bin/uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT}
 directory=${APP_DIR}
-environment=ZAPTHETRICK_CONFIG_PATH="${CFG}",PYTHONUNBUFFERED="1",HF_HOME="${HF_HOME}",ZAPTHETRICK_ENCRYPTION_KEY="${ZAPTHETRICK_ENCRYPTION_KEY:-}"
+environment=ZAPTHETRICK_CONFIG_PATH="${CFG}",PYTHONUNBUFFERED="1",HF_HOME="${HF_HOME}",ZAPTHETRICK_ENCRYPTION_KEY="${ZAPTHETRICK_ENCRYPTION_KEY:-}",ZAPTHETRICK_AUTH_SECRET="${ZAPTHETRICK_AUTH_SECRET}",ZAPTHETRICK_AUTH_MODE="${ZAPTHETRICK_AUTH_MODE}",ZAPTHETRICK_AUTH_ENFORCE="${ZAPTHETRICK_AUTH_ENFORCE}",GOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID:-}",GOOGLE_OAUTH_CLIENT_SECRET="${GOOGLE_OAUTH_CLIENT_SECRET:-}"
 autostart=true
 autorestart=true
 priority=20

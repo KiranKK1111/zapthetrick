@@ -78,6 +78,27 @@ def extract_examples(text: str, limit: int = 6) -> list[dict]:
             out.append({"input": inp, "input_raw": inp_raw, "expected": out_v})
         if len(out) >= limit:
             break
+    if out:
+        return out
+    # Call-arrow format — CodingBat / many stub-completion sites write examples
+    # as `square56([3, 1, 4]) → [19, 11]` (also `->`) instead of Input/Output
+    # blocks. Without this fallback such problems extract ZERO examples and the
+    # sandbox harness has nothing to check. The input is the argument list; the
+    # full call is kept as input_raw so the harness sees how to invoke it.
+    for m in re.finditer(
+            r"^[ \t]*(\w+)\s*\(([^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)\s*"
+            r"(?:→|⇒|->)\s*(.+?)\s*$",
+            text, re.MULTILINE):
+        inp = " ".join(m.group(2).split())[:400]
+        out_v = " ".join(m.group(3).split())[:200]
+        if inp and out_v:
+            out.append({
+                "input": inp,
+                "input_raw": f"{m.group(1)}({m.group(2).strip()})"[:600],
+                "expected": out_v,
+            })
+        if len(out) >= limit:
+            break
     return out
 
 

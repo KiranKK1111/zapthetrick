@@ -996,7 +996,52 @@ class ResponseArchSection(BaseModel):
     # Max nodes/lines a normalized diagram may carry before it's capped (a giant
     # auto-generated graph renders unreadably; better to cap + warn).
     mermaid_max_nodes: int = 60
-    mermaid_label_wrap: int = 24      # wrap labels longer than this many chars
+    mermaid_label_wrap: int = 24
+    # MermaidDiagramVisualizations.md #5 · ELK layout. Mermaid 11 can delegate
+    # layout to the Eclipse Layout Kernel, but ONLY when the host registers the
+    # `@mermaid-js/layout-elk` loader. Our bundled mermaid.min.js (11.15.0)
+    # registers only `dagre` and `cose-bilkent`, so turning this on today makes
+    # mermaid fall back to dagre silently. Left OFF until the loader ships with
+    # the FE bundle; the deterministic layout PLANNER (direction, spacing, curve,
+    # wrap) runs regardless, and `to_elk_json` already emits a standard ELK graph
+    # for any external ELK renderer.
+    #
+    # Why it stays OFF rather than being "turned on": mermaid's ELK loader
+    # (@mermaid-js/layout-elk) ships ONLY as an ESM bundle that is code-split into
+    # relative chunks AND imports `mermaid` as a bare peer specifier. The app's
+    # webview loads mermaid as a single classic IIFE asset, so the loader cannot be
+    # injected without a JS bundling step the Flutter project does not have.
+    # Enabling this flag without that bundle makes mermaid fall back to dagre
+    # silently — which is exactly the kind of no-op we refuse to ship. The
+    # deterministic layout planner (direction, spacing, curve, wrap AND
+    # crossing-reducing node ordering) runs regardless, and `to_elk_json` emits a
+    # standard ELK graph for any external ELK renderer.
+    mermaid_elk: bool = False
+    # MermaidDiagramVisualizations.md #1 · put the deterministic IR generator on
+    # the ANSWER path: every ```mermaid``` fence a model writes is recompiled from
+    # its own parsed structure (quoted labels, balanced subgraph/end, legal arrows,
+    # a planned layout). Default ON because the lane is gated to only ever touch a
+    # diagram it fully understands — an unmodelled diagram type (gantt, pie,
+    # journey, timeline, gitGraph, C4, …), an incomplete lift, an author-set
+    # style/init directive, a rebuild that doesn't round-trip identically, or one
+    # that would add validator errors all leave the fence byte-for-byte unchanged.
+    # See `app/diagrams/lane.py`.
+    diagram_ir_lane: bool = True
+    # MermaidDiagramVisualizations.md #1 · the MODEL half: re-derive a diagram as
+    # structured IR (`diagrams/planner.py`) and generate the Mermaid from that,
+    # instead of trusting the fence the model wrote.
+    #   "off"     — never (default). `diagram_ir_lane` still recompiles the syntax.
+    #   "repair"  — only when the deterministic path could not produce a clean
+    #               diagram: the structure could not be fully lifted, validator
+    #               errors remain, or the quality score is below the pass bar. One
+    #               extra model call, spent only on diagrams that were broken.
+    #   "always"  — re-plan every modelled diagram. The purest reading of the doc's
+    #               "don't let the LLM generate final artifacts", at one extra model
+    #               call per diagram turn.
+    # A planned diagram is ADOPTED only if it is measurably better (no validator
+    # errors, no loss of nodes/edges, score not lower), so enabling this cannot
+    # downgrade a diagram the model already got right.
+    diagram_planner: str = "off"      # wrap labels longer than this many chars
 
 
 class ContinuitySection(BaseModel):

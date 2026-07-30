@@ -37,6 +37,31 @@ from app.agent_workspace import redact_event, redact_secrets
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat-agent"])
 
+
+async def _compile_diagrams(text: str, request: str = "") -> str:
+    """Put an agent summary's ```mermaid``` fences through the diagram pipeline
+    (MermaidDiagramVisualizations.md #1).
+
+    Two halves, in order:
+      * `compile_answer` — deterministic. Recompiles each fence from its parsed
+        structure so the generator, not the model, emits the final syntax.
+      * `plan_answer` — the model half, OFF by default
+        (`response_arch.diagram_planner`). Re-derives a diagram as structured IR
+        when the deterministic rebuild could not clean it up. Returns immediately
+        when disabled, so this costs nothing in the default configuration.
+
+    This route does not run `response_arch.finalize` — it takes the agent loop's
+    `final` message verbatim — so the lane is called here directly. Heavily gated
+    and fail-open (see `app/diagrams/lane.py`): an unmodelled diagram type or an
+    incomplete lift leaves the fence exactly as written.
+    """
+    try:
+        from app.diagrams.lane import compile_answer, plan_answer
+        compiled = compile_answer(text)
+        return await plan_answer(compiled, request=request) or compiled
+    except Exception:  # noqa: BLE001 — additive; never break an agent run
+        return text
+
 # Detached persist-on-disconnect tasks (GC guard).
 _BG_SAVES: set = set()
 
@@ -580,7 +605,8 @@ async def chat_agent_run(body: ChatAgentRunBody) -> StreamingResponse:
                     elif et0 == "error":
                         _sig["had_error"] = True
                     if et0 == "final":
-                        final_text = str(evt.get("message", ""))
+                        final_text = await _compile_diagrams(
+                            str(evt.get("message", "")), body.task)
                     yield _emit(evt.get("type", "event"), evt)
                 d = await _diff(workspace)
                 if _red:
@@ -692,7 +718,8 @@ async def chat_agent_run(body: ChatAgentRunBody) -> StreamingResponse:
                         _sig["had_error"] = True
                     yield _frame(et, evt)
                     if et == "final":
-                        final_text = str(evt.get("message", ""))
+                        final_text = await _compile_diagrams(
+                            str(evt.get("message", "")), body.task)
                     if not persist:
                         continue
                     if et != "final":

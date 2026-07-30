@@ -51,14 +51,29 @@ class _Result:
 
 
 class _FakeSession:
-    """Serves scripted results per model, records deletes/commits."""
+    """Serves scripted results per model, records adds/deletes/commits."""
 
     def __init__(self, by_model=None, delete_rowcounts=None):
         self.by_model = by_model or {}
         self.delete_rowcounts = delete_rowcounts or {}
         self.deleted = []
+        self.added = []
         self.committed = 0
         self.store = {}
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def flush(self):
+        # Stand in for the INSERT that assigns the primary key — import_bundle
+        # needs the new id to re-link children.
+        for obj in self.added:
+            if getattr(obj, "id", None) is None:
+                obj.id = uuid.uuid4()
+
+    def of(self, name):
+        """Every added row of one model, in insertion order."""
+        return [o for o in self.added if type(o).__name__ == name]
 
     async def execute(self, stmt):
         # crude model detection from the statement's target entity
@@ -135,6 +150,7 @@ def test_export_all_shapes_bundle():
             self.type = "chat"
             self.project_id = None
             self.session_metadata = {"kg": {"nodes": [{"id": "x"}]}}
+            self.started_at = datetime.now(timezone.utc)
 
     class _Ep:
         def __init__(self):
@@ -196,3 +212,150 @@ def test_forget_episode_deletes_row():
 def test_forget_episode_missing_returns_false():
     assert asyncio.run(dl.forget_episode(_FakeSession(), str(uuid.uuid4()))) is False
     assert asyncio.run(dl.forget_episode(_FakeSession(), "not-a-uuid")) is False
+
+
+# ---- import (the mirror of export-all) -----------------------------------
+
+def _bundle():
+    """One project, one chat + one live session, messages for both, and one
+    episode + one skill — i.e. every section, so section selection is testable."""
+    proj, chat, live = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    return {
+        "projects": [{"id": proj, "name": "Interview prep",
+                      "instructions": "be terse",
+                      "kg": {"nodes": [{"id": "dp"}]}}],
+        "conversations": [
+            {"id": chat, "title": "Two Sum", "type": "chat",
+             "project_id": proj, "started_at": "2026-07-01T10:00:00+00:00"},
+            {"id": live, "title": "Mock round", "type": "live",
+             "project_id": None},
+        ],
+        "messages": [
+            {"conversation_id": chat, "role": "user", "content": "solve it",
+             "created_at": "2026-07-01T10:00:01+00:00"},
+            {"conversation_id": chat, "role": "assistant", "content": "here"},
+            {"conversation_id": live, "role": "user", "content": "hello"},
+            {"conversation_id": str(uuid.uuid4()), "role": "user",
+             "content": "orphan"},
+        ],
+        "episodes": [{"question": "q", "final": "a", "project_id": proj}],
+        "skills": [{"text": "always check bounds", "kind": "lesson",
+                    "confidence": 0.8}],
+    }
+
+
+def test_sections_in_bundle_counts_each_section():
+    out = dl.sections_in_bundle(_bundle())
+    assert out == {"chat_sessions": 1, "live_sessions": 1, "projects": 1,
+                   "memories": 2}
+
+
+def test_sections_in_bundle_tolerates_garbage():
+    assert dl.sections_in_bundle({}) == {"chat_sessions": 0, "live_sessions": 0,
+                                         "projects": 0, "memories": 0}
+    assert dl.sections_in_bundle(None)["projects"] == 0
+    # A conversation with no `type` counts as a chat, not as nothing.
+    assert dl.sections_in_bundle(
+        {"conversations": [{"id": "x"}, "junk"]})["chat_sessions"] == 1
+
+
+def test_import_everything_relinks_the_graph():
+    sess = _FakeSession()
+    uid = uuid.uuid4()
+    out = asyncio.run(dl.import_bundle(sess, user_id=uid, bundle=_bundle()))
+
+    assert out["imported"]["projects"] == 1
+    assert out["imported"]["chat_sessions"] == 1
+    assert out["imported"]["live_sessions"] == 1
+    assert out["imported"]["memories"] == 2
+    # 3 of the 4 messages have a parent in the bundle; the 4th is dropped.
+    assert out["imported"]["messages"] == 3
+    assert out["imported"]["orphan_messages"] == 1
+    assert sess.committed == 1
+
+    project = sess.of("Project")[0]
+    chat = next(s for s in sess.of("Session") if s.type == "chat")
+    live = next(s for s in sess.of("Session") if s.type == "live")
+    # The bundle's ids are NOT reused — they only re-link parent → child.
+    assert chat.project_id == project.id
+    assert live.project_id is None
+    assert {m.session_id for m in sess.of("Message")} == {chat.id, live.id}
+    assert all(r.user_id == uid for r in sess.of("Session") + sess.of("Project"))
+    # Timestamps survive the round trip so the thread keeps its order.
+    assert chat.started_at.year == 2026
+
+
+def test_import_respects_section_selection():
+    sess = _FakeSession()
+    out = asyncio.run(dl.import_bundle(
+        sess, user_id=None, bundle=_bundle(), sections=["live_sessions"]))
+    assert out["imported"]["live_sessions"] == 1
+    assert out["imported"]["chat_sessions"] == 0
+    assert out["imported"]["projects"] == 0
+    assert out["imported"]["memories"] == 0
+    # Only the live session's own message came across; the chat's are orphans
+    # because their conversation wasn't selected.
+    assert out["imported"]["messages"] == 1
+    assert [s.type for s in sess.of("Session")] == ["live"]
+    # A conversation whose project wasn't imported must not carry a dangling FK.
+    assert sess.of("Session")[0].project_id is None
+
+
+def test_import_reports_unknown_sections_and_skips_them():
+    sess = _FakeSession()
+    out = asyncio.run(dl.import_bundle(
+        sess, user_id=None, bundle=_bundle(),
+        sections=["projects", "passwords"]))
+    assert out["ignored_sections"] == ["passwords"]
+    assert out["imported"]["projects"] == 1
+    assert out["imported"]["chat_sessions"] == 0
+
+
+def test_import_empty_bundle_is_a_noop_that_still_answers():
+    sess = _FakeSession()
+    out = asyncio.run(dl.import_bundle(sess, user_id=None, bundle={}))
+    assert out["imported"]["chat_sessions"] == 0
+    assert out["available"]["projects"] == 0
+    assert sess.added == []
+
+
+def test_import_skips_blank_skills_and_contentless_messages():
+    sess = _FakeSession()
+    cid = str(uuid.uuid4())
+    bundle = {
+        "conversations": [{"id": cid, "title": "t", "type": "chat"}],
+        "messages": [{"conversation_id": cid, "role": "user", "content": None},
+                     {"conversation_id": cid, "role": "user", "content": "ok"}],
+        "skills": [{"text": "   "}, {"text": "real"}],
+    }
+    out = asyncio.run(dl.import_bundle(sess, user_id=None, bundle=bundle))
+    assert out["imported"]["messages"] == 1
+    assert out["imported"]["orphan_messages"] == 1
+    assert out["imported"]["memories"] == 1
+
+
+def test_import_survives_a_garbage_timestamp():
+    sess = _FakeSession()
+    cid = str(uuid.uuid4())
+    bundle = {
+        "conversations": [{"id": cid, "title": "t", "type": "chat",
+                           "started_at": "not-a-date"}],
+        "messages": [{"conversation_id": cid, "role": "user", "content": "x",
+                      "created_at": ""}],
+    }
+    out = asyncio.run(dl.import_bundle(sess, user_id=None, bundle=bundle))
+    assert out["imported"]["chat_sessions"] == 1
+    assert out["imported"]["messages"] == 1
+
+
+# ---- routes --------------------------------------------------------------
+# Asserted against the router object, NOT a TestClient over app.main — importing
+# app.main loads the ML models and leaks state into later tests.
+
+def test_import_routes_are_registered():
+    from app.api.routes_agents import router
+
+    paths = {getattr(r, "path", "") for r in router.routes}
+    assert "/api/agents/data/import" in paths
+    assert "/api/agents/data/import/inspect" in paths
+    assert "/api/agents/data/export" in paths   # the pair stays a pair

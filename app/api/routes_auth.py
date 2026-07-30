@@ -53,6 +53,29 @@ class AuthUserOut(BaseModel):
     email_verified: bool = True
 
 
+class ProfileOut(BaseModel):
+    id: str
+    email: str | None = None
+    full_name: str = ""
+    # What the assistant should call the user (falls back to the full name's
+    # first word when blank — see `personalization.profile.preferred_name`).
+    display_name: str = ""
+    # A small image as a data URL; "" when unset. See `personalization/profile.py`
+    # for why it lives in `preferences` rather than blob storage.
+    avatar: str = ""
+    limits: dict = {}
+    # Fields that were sent but could not be stored (e.g. an oversized avatar).
+    # Reported rather than silently dropped.
+    rejected: list[str] = []
+
+
+class ProfileUpdate(BaseModel):
+    """Every field optional: omitted = leave alone, "" = clear."""
+    full_name: str | None = Field(default=None, max_length=200)
+    display_name: str | None = Field(default=None, max_length=200)
+    avatar: str | None = Field(default=None, max_length=300_000)
+
+
 class AuthTokenResponse(BaseModel):
     token: str
     token_type: str = "bearer"
@@ -267,6 +290,107 @@ async def me(session: AsyncSession = Depends(get_session)) -> AuthUserOut:
     if user is None:
         raise HTTPException(status_code=401, detail="Unknown user.")
     return _user_out(user)
+
+
+async def _current_user(session: AsyncSession) -> User:
+    """The signed-in user, or 401. Shared by the profile routes below."""
+    uid = _auth.current_user_id()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    try:
+        user = await session.get(User, uuid.UUID(str(uid)))
+    except (ValueError, TypeError):
+        user = None
+    if user is None:
+        raise HTTPException(status_code=401, detail="Unknown user.")
+    return user
+
+
+@router.get("/profile", response_model=ProfileOut)
+async def get_profile(
+    session: AsyncSession = Depends(get_session),
+) -> ProfileOut:
+    """The editable profile behind the Profile screen.
+
+    Separate from `/me` on purpose: `/me` is the auth identity (id, email,
+    verification state) that the sign-in flow depends on, and widening it would
+    make every auth response carry an avatar. This is the presentation profile.
+    """
+    from app.personalization.profile import profile_payload
+    return ProfileOut(**profile_payload(await _current_user(session)))
+
+
+@router.patch("/profile", response_model=ProfileOut)
+async def update_profile(
+    body: ProfileUpdate,
+    session: AsyncSession = Depends(get_session),
+) -> ProfileOut:
+    """Update the profile. Every field is OPTIONAL and only applied when present.
+
+    Omitting a field leaves it untouched; sending an explicit empty string CLEARS
+    it. That distinction matters for the avatar and the preferred name, where
+    "don't change this" and "remove this" are different intents — a PUT-style
+    whole-object write would have made clearing indistinguishable from a client
+    that simply didn't load the field yet.
+
+    The full name writes through to `User.name` (a real column, used by auth); the
+    preferred name and avatar go into `User.preferences`. An avatar that fails
+    validation is reported in `rejected` and the rest of the profile still saves —
+    a bad image must not block a name change.
+    """
+    from app.personalization.profile import (
+        clean_full_name, clean_avatar, profile_payload, set_avatar,
+        set_display_name,
+    )
+
+    user = await _current_user(session)
+    rejected: list[str] = []
+
+    if body.full_name is not None:
+        user.name = clean_full_name(body.full_name) or None
+    if body.display_name is not None:
+        user.preferences = set_display_name(user.preferences, body.display_name)
+    if body.avatar is not None:
+        raw = body.avatar.strip()
+        if raw and not clean_avatar(raw):
+            # Present but unusable — say so instead of silently dropping it.
+            rejected.append(
+                "avatar must be a PNG/JPEG/WebP/GIF data URL under "
+                "192 KB (SVG is not accepted)")
+        else:
+            user.preferences = set_avatar(user.preferences, raw)
+
+    await session.commit()
+    await session.refresh(user)
+    return ProfileOut(**profile_payload(user), rejected=rejected)
+
+
+@router.delete("/account")
+async def delete_account(
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """PERMANENTLY delete the current user's account and everything keyed to
+    it. Two passes: `data_lifecycle.delete_all` sweeps conversations, memory,
+    projects, vectors, and blobs (the same sweep the privacy wipe uses), then
+    the User row itself is deleted — resumes, API keys, and usage rows go with
+    it via their `ondelete=CASCADE` foreign keys. Irreversible by design."""
+    uid = _auth.current_user_id()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    try:
+        user = await session.get(User, uuid.UUID(str(uid)))
+    except (ValueError, TypeError):
+        user = None
+    if user is None:
+        raise HTTPException(status_code=401, detail="Unknown user.")
+    try:
+        from app.memory import data_lifecycle
+        await data_lifecycle.delete_all(session, user_id=str(user.id))
+    except Exception:  # noqa: BLE001 — the user-row cascade below still wipes
+        pass           # relational data even if the vector/blob sweep failed.
+    await session.delete(user)
+    await session.commit()
+    return {"deleted": True}
 
 
 @router.post("/refresh", response_model=AuthTokenResponse)

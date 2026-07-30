@@ -1,5 +1,6 @@
 {
   "_note": "Frozen architecture allowlists (Phase 0 guardrails). Adding an entry is an intentional act \u2014 the git diff of this file IS the lightweight ADR (roadmap rule #1/#3/#20). New items not listed here fail the guardrail tests until added.",
+  "_adr_diagrams": "`diagrams` (added for MermaidDiagramVisualizations.md #1) owns the diagram INTERMEDIATE REPRESENTATION and everything deterministic built on it: the IR \u2192 Mermaid emitter, the Mermaid \u2192 IR reader, the syntax/semantic/style/accessibility validators, the quality score, the layout planner, the edit applier, version history and the PlantUML/DOT/Draw.io/ELK exporters. It is a separate package rather than more of `response_arch` because it is an ARTIFACT COMPILER, not part of answer shaping: `response_arch.mermaid` lints and renders a mermaid STRING inside a response lane, whereas this package's contract is that the model never emits final syntax at all. Keeping it separate is also what makes the doc's #18 (\"extend the same pipeline beyond Mermaid\") cheap \u2014 a PlantUML- or BPMN-first artifact reuses the IR, validators and versioning without touching the response pipeline. Model access is confined to `diagrams/planner.py` and `diagrams/critic.py`; every other module is pure and unit-tested without a model.",
   "packages": [
     "agent",
     "agent_workspace",
@@ -15,6 +16,7 @@
     "codeintel",
     "continuity",
     "core",
+    "diagrams",
     "documents",
     "dsa",
     "eval",
