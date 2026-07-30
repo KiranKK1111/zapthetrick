@@ -591,6 +591,32 @@ class ServerSection(BaseModel):
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
 
 
+class GoogleOAuthSection(BaseModel):
+    """Google sign-in credentials (`GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` win)."""
+    client_id: str = ""
+    client_secret: str = ""
+
+
+class AuthSection(BaseModel):
+    """Account hosting. Read by `app/api/auth_native.py` + `auth_oauth.py`,
+    which document an "env wins, else config" precedence — this section is the
+    "else config" half. It was MISSING from the model, so `cfg.auth` never
+    resolved and every config-file fallback silently did nothing: a pod could
+    only be configured through environment variables, and an `auth:` block in
+    config.yaml was dropped without a word.
+
+    mode: `native` (this backend hosts accounts) | `supabase` | `off`.
+    Empty → inferred: a jwt_secret present means native.
+    """
+    mode: str = ""
+    jwt_secret: str = ""
+    enforce: bool = False
+    require_email_verification: bool = False
+    supabase_url: str = ""
+    public_url: str = ""
+    google: GoogleOAuthSection = Field(default_factory=GoogleOAuthSection)
+
+
 class PostgresSection(BaseModel):
     """Postgres connection config.
 
@@ -2529,6 +2555,7 @@ class Config(BaseModel):
     git_workflow: GitWorkflowSection = Field(default_factory=GitWorkflowSection)
     ui: UISection = Field(default_factory=UISection)
     server: ServerSection = Field(default_factory=ServerSection)
+    auth: AuthSection = Field(default_factory=AuthSection)
     database: DatabaseSection = Field(default_factory=DatabaseSection)
 
     # Architecture.md §9 additions.
