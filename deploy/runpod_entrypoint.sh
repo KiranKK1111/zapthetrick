@@ -293,7 +293,7 @@ stdout_logfile=/workspace/dragonfly.log
 stderr_logfile=/workspace/dragonfly.log
 
 [program:app]
-command=${VENV}/bin/uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT}
+command=${VENV}/bin/uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT} --proxy-headers --forwarded-allow-ips=*
 directory=${APP_DIR}
 environment=ZAPTHETRICK_CONFIG_PATH="${CFG}",PYTHONUNBUFFERED="1",HF_HOME="${HF_HOME}",ZAPTHETRICK_ENCRYPTION_KEY="${ZAPTHETRICK_ENCRYPTION_KEY:-}",ZAPTHETRICK_AUTH_SECRET="${ZAPTHETRICK_AUTH_SECRET}",ZAPTHETRICK_AUTH_MODE="${ZAPTHETRICK_AUTH_MODE}",ZAPTHETRICK_AUTH_ENFORCE="${ZAPTHETRICK_AUTH_ENFORCE}",GOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID:-}",GOOGLE_OAUTH_CLIENT_SECRET="${GOOGLE_OAUTH_CLIENT_SECRET:-}"
 autostart=true
