@@ -10,6 +10,8 @@ answer. Deterministic + fail-open.
 """
 from __future__ import annotations
 
+import re
+
 # Common follow-up sub-topics per well-known topic (deterministic seed).
 _FOLLOWUPS = {
     "kafka": ["partitions", "consumer groups", "offsets", "rebalancing", "exactly-once delivery"],
@@ -40,8 +42,16 @@ def predict_next(topic_graph=None, world_model=None, max_n: int = 5) -> list[str
             return []
         out: list[str] = []
         # Known sub-topics first (most likely follow-ups).
+        #
+        # Matched on WHOLE WORDS, not substrings. The previous
+        # `key in topic or topic in key` fired on fragments — a topic of "net"
+        # or "ku" matched "kubernetes" and produced "Tell me about net pods."
+        # A garbled or truncated topic string silently inherited an unrelated
+        # topic's follow-ups, which is how a Spring question ended up with
+        # Kubernetes suggestions in a live session.
+        words = set(re.findall(r"[a-z0-9]+", topic))
         for key, subs in _FOLLOWUPS.items():
-            if key in topic or topic in key:
+            if key in words:
                 out.extend(f"Tell me about {topic} {s}." for s in subs)
                 break
         # Then generic templates.

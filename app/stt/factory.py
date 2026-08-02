@@ -194,6 +194,23 @@ def _provider_chain() -> list[str]:
 async def transcribe_with_confidence(
     audio_np, prompt: str | None = None,
 ) -> tuple[str, float | None]:
+    """Public entrypoint — delegates, then drops ASR hallucinations.
+
+    Wrapping rather than patching each provider branch: the fallback chain has
+    several return points and a missed one is a silent leak.
+    """
+    text, conf = await _transcribe_with_confidence_raw(audio_np, prompt)
+    from app.stt.hallucination import is_hallucination
+    if is_hallucination(text, audio_np):
+        log.info("stt: dropped hallucinated transcript %r on silent audio",
+                 (text or "")[:40])
+        return "", conf
+    return text, conf
+
+
+async def _transcribe_with_confidence_raw(
+    audio_np, prompt: str | None = None,
+) -> tuple[str, float | None]:
     """Like `transcribe_async`, but also returns the engine's confidence when
     one exists (the dual-engine arbitrator produces a real score; single
     engines return None). Lets downstream answer confidence reflect a
@@ -247,6 +264,20 @@ async def transcribe_with_confidence(
 
 
 async def transcribe_partial(audio_np) -> str:
+    """Public entrypoint — delegates, then drops ASR hallucinations.
+
+    Partials matter most here: a live session produced 13 hallucinated partials
+    out of 22, so without this the caption flickers "Thank you." constantly even
+    when the downstream gate discards the finalized utterance.
+    """
+    text = await _transcribe_partial_raw(audio_np)
+    from app.stt.hallucination import is_hallucination
+    if is_hallucination(text, audio_np):
+        return ""
+    return text
+
+
+async def _transcribe_partial_raw(audio_np) -> str:
     """Interim (streaming) transcription of an IN-PROGRESS utterance.
 
     Uses the fast provider configured as `cfg.stt.partial_provider` (default

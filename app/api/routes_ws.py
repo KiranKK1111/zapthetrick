@@ -620,6 +620,29 @@ async def live_listen(
         # paraphrasing the answer we just showed — that voice is NOT a new
         # question, so skip it instead of transcribing + re-answering. Audio
         # only (typed input is deliberate); fully fail-open.
+        # SOLO DELIVERY STATE: after an answer is shown the candidate is
+        # expected to speak. Echo matching only catches them READING our answer
+        # back; answering in their own words matched nothing and was sent to the
+        # LLM as a new question. Inside the window, speech is delivery unless it
+        # carries a strong GRAMMATICAL question signal — a real question always
+        # wins, because leaving one unanswered is the worse failure.
+        if (is_audio and solo_mode
+                and getattr(cfg.live, "solo_delivery_state", True)):
+            try:
+                from app.live import delivery_state as _ds
+                _suppress, _why = _ds.should_suppress(
+                    _ds.state_for(sid or ""), utterance)
+                if _suppress:
+                    await send({"type": "skipped", "qid": qid,
+                                "text": utterance,
+                                "reason": "candidate_delivery",
+                                "detail": _why})
+                    await send({"type": "done", "qid": qid,
+                                "skipped": "candidate_delivery"})
+                    return
+            except Exception:  # noqa: BLE001 — fail open: answer it
+                _layer_failed()
+
         if is_audio and getattr(cfg.live, "candidate_echo_skip", False):
             # Applies in SOLO too (2026-07-28): this check is CONTENT-based —
             # `is_candidate_echo` matches the utterance against the DISPLAYED
@@ -2076,6 +2099,18 @@ async def live_listen(
                             from app.live import echo as _echo2
                             _echo2.remember_answer(sid or "", answer_text)
                             _echo2.reset_streaming(sid or "")
+                        except Exception:  # noqa: BLE001
+                            pass
+                    # SOLO delivery state: the candidate is now EXPECTED to
+                    # speak. Opens the window in which their speech is treated
+                    # as delivery rather than as a new question.
+                    if solo_mode:
+                        try:
+                            from app.live import delivery_state as _ds
+                            _st = _ds.state_for(sid or "")
+                            _st.window_s = float(getattr(
+                                cfg.live, "solo_delivery_window_s", 25.0))
+                            _st.answer_shown(topic or "")
                         except Exception:  # noqa: BLE001
                             pass
                     # Snapshot the in-process conversational state (tracker

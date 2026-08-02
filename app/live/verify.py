@@ -110,16 +110,53 @@ def looks_like_leaked_reasoning(answer: str) -> bool:
         return False
 
 
+# Markdown STRUCTURE that legitimately contains long space-free runs. A table
+# separator like `|-------|------------------|` is 57 characters with no spaces
+# and is not garbage — it is a well-formatted answer. Treating it as gibberish
+# flagged good answers, forced a pointless regeneration, and showed the user the
+# same answer twice at roughly double the latency. Observed in a live session:
+# a correct @Controller vs @RestController answer scored relevance 0.0 purely
+# because it contained a comparison table.
+_MD_STRUCTURE = re.compile(
+    r"^\s*\|?[\s:|-]{3,}\|?\s*$"      # table separator rows
+    r"|^\s*(?:-{3,}|\*{3,}|_{3,})\s*$"  # horizontal rules
+    r"|^\s*```.*$",                      # fence lines
+    re.M,
+)
+# A URL is one long token by nature and says nothing about coherence.
+_URL = re.compile(r"https?://\S+|`[^`]*`")
+
+
+def _prose_only(text: str) -> str:
+    """Strip markdown structure so the garbage heuristics judge PROSE.
+
+    The checks below are about whether the model produced language or mush.
+    Structural markup is neither, so leaving it in makes a well-formatted answer
+    look like a whitespace-free mash.
+    """
+    t = _MD_STRUCTURE.sub(" ", text or "")
+    return _URL.sub(" ", t)
+
+
 def looks_incoherent(answer: str) -> bool:
     """Deterministic structural-garbage check on a FINISHED answer — catches
     broken output the semantic relevance score can miss: unknown/replacement
     tokens, whitespace-free mashes, or one token dominating the text (runaway
-    repetition). Cheap; runs before the LLM verifier. Never raises."""
+    repetition). Cheap; runs before the LLM verifier. Never raises.
+
+    Judged on PROSE only: markdown tables, rules, fences and URLs are stripped
+    first, because they legitimately contain long space-free runs and a
+    well-formatted answer must not read as garbage."""
     try:
-        t = (answer or "").strip()
-        if not t:
+        raw = (answer or "").strip()
+        if not raw:
             return True
-        if "<unk>" in t or t.count("�") >= 3:
+        if "<unk>" in raw or raw.count("�") >= 3:
+            return True
+        t = _prose_only(raw).strip()
+        if not t:
+            # Structure only, no prose at all — e.g. a bare table with no
+            # sentence around it. That IS a broken answer.
             return True
         if max((len(w) for w in t.split()), default=0) >= 50:
             return True

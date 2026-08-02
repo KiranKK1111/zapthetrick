@@ -400,20 +400,26 @@ class PersonaAgent(Agent):
                 ):
                     collected.append(chunk)
                     yield chunk
+        # A provider failure is recorded for the pipeline but NEVER streamed.
+        #
+        # These markers are an internal signal: `routes_agents` reads them out
+        # of the assembled text and turns the turn into an interrupted one with
+        # Continue/Retry, and `fingerprint`/`validate` use them to reject a
+        # failed draft. All of that still works — the marker still lands in
+        # `collected`.
+        #
+        # What changed is that it is no longer `yield`ed. Yielding put the raw
+        # provider error — internal ids, account identifiers and all — on screen
+        # AS THE ASSISTANT'S ANSWER, and persisted it into conversation history
+        # as though the model had said it. A failed generation is a transport
+        # failure with a retry affordance, not a message.
         except LLMError as exc:
-            # Provider is reachable-but-refusing (bad key, model gone,
-            # quota). Surface inline so the user sees what happened and
-            # so it lands in `drafts_current` for downstream agents.
-            msg = f"\n[LLM error: {exc}]"
-            collected.append(msg)
-            yield msg
+            # Provider reachable-but-refusing (bad key, model gone, quota).
+            collected.append(f"\n[LLM error: {exc}]")
         except Exception as exc:  # noqa: BLE001
-            # Anything else: transport, parse, timeout. Don't let an
-            # unhandled exception escape — it would propagate through
-            # the supervisor and tear down the whole turn.
-            msg = f"\n[Persona could not call the LLM: {exc}]"
-            collected.append(msg)
-            yield msg
+            # Anything else: transport, parse, timeout. Don't let an unhandled
+            # exception escape — it would tear down the whole turn.
+            collected.append(f"\n[Persona could not call the LLM: {exc}]")
 
         text = "".join(collected).strip()
         if not text:

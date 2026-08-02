@@ -2215,6 +2215,15 @@ class LiveSection(BaseModel):
     candidate_echo_skip: bool = True
     candidate_echo_threshold: float = 0.72
 
+    # SOLO mode: after an answer is shown, treat the candidate's speech as
+    # DELIVERY unless it carries a strong GRAMMATICAL question signal. Solo has
+    # no role tag to separate speakers, so without this a candidate answering in
+    # their OWN words — rather than reading ours back, which echo matching
+    # already catches — is transcribed and answered. The app interrupts the
+    # person it exists to help.
+    solo_delivery_state: bool = True
+    solo_delivery_window_s: float = 25.0
+
     # Compound questions ("what is X and how do you use it?") answered as ONE
     # response with per-part headings instead of two bubbles (enhancement #4).
     combine_multi_questions: bool = True
