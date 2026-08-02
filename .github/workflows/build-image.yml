@@ -43,6 +43,14 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/zapthetrick-runpod:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/zapthetrick-runpod:${{ github.sha }}
+          # Stamp the commit INTO the image, so a running pod can report exactly
+          # which build it is. `:latest` is mutable — a pod started before a push
+          # keeps serving the old image, and from the outside that is
+          # indistinguishable from "the fix did not work". That ambiguity cost a
+          # full debugging cycle; the SHA tag removes it.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           # Layer cache in the registry → later builds only re-push what changed.
           cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/zapthetrick-runpod:buildcache
           cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/zapthetrick-runpod:buildcache,mode=max

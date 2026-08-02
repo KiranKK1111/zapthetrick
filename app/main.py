@@ -661,7 +661,20 @@ async def healthz() -> dict:
     flaps during model warmup — this is what the pod watchdog / RunPod proxy
     should poll. Readiness of subsystems is a separate signal at /readyz."""
     from app.api.readiness import liveness
-    return liveness()
+    out = liveness()
+    # Which IMAGE is this pod running? Baked at build time by the Dockerfile.
+    # Without it, a pod started before a push keeps serving the old image and
+    # that is indistinguishable from a fix that did not work — which cost a full
+    # debugging cycle. Unauthenticated on purpose: it identifies a build, not a
+    # user, and it is only useful if you can read it before you can log in.
+    try:
+        with open("/opt/build_sha", "r", encoding="utf-8") as fh:
+            sha = fh.read().strip()
+        if sha:
+            out["build"] = sha[:12]
+    except Exception:  # noqa: BLE001 — a dev box has no stamp; that is fine
+        pass
+    return out
 
 
 @app.get("/readyz")

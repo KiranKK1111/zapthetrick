@@ -88,6 +88,37 @@ RUN python3 -m venv "$VENV" \
   # fail-open: absent/failing runtime ⇒ Edge, exactly as before.
   && "$VENV/bin/pip" install --no-cache-dir kokoro lameenc
 
+# 5a) VERIFY the critical imports actually resolve, in the finished environment.
+#
+#     A deployed pod was found reporting `sentence-transformers is not installed`
+#     even though it is pinned in requirements.txt and installed above. Several
+#     packages install AFTER it (bitsandbytes, onnxruntime-gpu, kokoro) and pip
+#     will happily resolve a conflict by removing something; a cached layer can
+#     preserve that state indefinitely. Nothing failed loudly — the build went
+#     green and shipped an image where much of the intelligence was inert:
+#
+#       * the embedder backs EVERY semantic gate, so indirect questions stop
+#         being promoted and the floor-holding veto stops firing;
+#       * candidate echo suppression calls it, so in solo mode the candidate
+#         reading an answer back is transcribed and answered;
+#       * RAG/resume retrieval is embedding-based, so resume grounding degrades.
+#
+#     One missing dependency, three user-visible failures, and a green build.
+#     This turns that into a BUILD failure instead — the only place it is cheap.
+RUN set -e; \
+    for mod in sentence_transformers torch transformers numpy fastapi \
+               httpx yaml sqlalchemy; do \
+      "$VENV/bin/python" -c "import $mod" \
+        || { echo "FATAL: '$mod' does not import in the built image"; exit 1; }; \
+    done; \
+    echo "import check OK: $("$VENV/bin/python" -c 'import sentence_transformers as s; print(s.__version__)')"
+
+# 5c) Stamp the build. `/opt/build_sha` lets a running pod state exactly which
+#     image it is — the question that was unanswerable while only `:latest`
+#     existed, and the reason a stale pod looked like a failed fix.
+ARG GIT_SHA=unknown
+RUN echo "${GIT_SHA}" > /opt/build_sha
+
 # 5b) Local generation floor (§2.1 T4): llama.cpp OpenAI-compatible server, run on
 #     127.0.0.1 when LOCAL_LLM_ENABLED=1. Built with CUDA (-DGGML_CUDA=on) so the
 #     model's layers run on the pod's GPU — the whole point of "generate on the
