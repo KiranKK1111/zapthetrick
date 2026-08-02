@@ -20,6 +20,19 @@ llm:
   live_max_tokens: 4000
   live_first_token_timeout: 10.0
   live_detailed: true
+  # On-pod local generation floor (§2.1 T4) — the never-empty routing ladder's
+  # last rung. When enabled the app seeds an always-available local model that
+  # needs no key and cannot be rate-limited, which is what makes "no route
+  # available" structurally impossible rather than merely unlikely.
+  #
+  # This block was ABSENT from the shipped defaults, so a pod that got its
+  # config from here never gained the rung: the GPU model could be installed and
+  # running while the router had no way to reach it.
+  local:
+    enabled: true
+    model_id: qwen3-4b-instruct
+    base_url: http://127.0.0.1:8081/v1
+    small_model_id: ''
   base_url: http://localhost:11434
   openrouter_api_key: ''
   openrouter_base_url: https://openrouter.ai/api/v1
@@ -444,6 +457,10 @@ ops:
   resurrect_after_failures: 3
 voice:
   tts: true
+  # Acoustic echo cancellation — a real FDAF canceller (app/voice/aec.py),
+  # measured at 18-32 dB ERLE. Needed for speaker barge-in on Windows and under
+  # the realtime engine on every platform.
+  native_aec: true
   # GPU-local synthesis on the pod (no Microsoft round-trip per sentence).
   # Automatically degrades to 'edge' when the Kokoro runtime isn't present.
   tts_engine: kokoro
@@ -451,6 +468,48 @@ voice:
   # streamed over the socket (today); "omni" = a registered speech-native model
   # (app/live/s2s.py) behind the same frames — flip only once one is deployed.
   s2s_engine: staged
+  # realtime-voice-mode: which VoiceEngine serves the chat voice surface.
+  #   staged   — local cascade (default). No credential, no metered spend.
+  #   realtime — speech-native cloud session; needs realtime_model + a key.
+  #   auto     — realtime when credential + reachability + budget allow.
+  # `realtime_model: ''` is a HARD interlock: realtime is never selected while
+  # it is empty, whatever `engine` says. Default spend is therefore exactly 0.
+  engine: staged
+  realtime_model: ''
+  realtime_base_url: wss://api.openai.com/v1/realtime
+  realtime_api_key: ''
+  # How the speech model decides you have FINISHED speaking.
+  #   semantic_vad — the model judges whether the thought is complete. This is
+  #     what stops a natural mid-sentence pause ("so the thing is... uh...")
+  #     being treated as the end of your turn, and it is the biggest single
+  #     reason ChatGPT's voice mode does not talk over you.
+  #   server_vad   — a fixed silence timer. Predictable, and it interrupts
+  #     anyone who thinks while speaking. Auto-selected if the endpoint rejects
+  #     semantic VAD, so this is a fallback rather than a downgrade you pick.
+  realtime_turn_detection: semantic_vad
+  # How readily the model takes its turn: low waits longer (considered speech),
+  # high replies sooner, auto lets the model balance it.
+  realtime_eagerness: auto
+  realtime_silence_ms: 500          # server_vad fallback only
+  # Upstream mic noise suppression. Without it a laptop fan or a room is fed to
+  # the turn detector as though it were speech.
+  realtime_noise_reduction: near_field   # near_field | far_field | ''
+  realtime_transcribe_model: whisper-1
+  # Every ceiling defaults to 0 => "no budget remaining" => realtime refused.
+  # Raising these is a deliberate act; nobody should learn the cost from a bill.
+  budget:
+    daily_usd: 0.0
+    monthly_usd: 0.0
+    session_minutes: 15.0
+    warn_at: 0.8
+    audio_input_per_mtok: 32.0
+    audio_output_per_mtok: 64.0
+    cached_input_per_mtok: 0.4
+  # Phase 4 — admit only the enrolled speaker's voice as a turn. Inert until an
+  # embedder exists; an absent embedder means exactly current behaviour.
+  speaker_gate: false
+  speaker_threshold: 0.65
+  jitter_target_ms: 120
   loop: false
   wake_word: false
   conversational_intel: true

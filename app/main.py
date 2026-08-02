@@ -120,6 +120,9 @@ from app.api.routes_jobs import router as jobs_router
 from app.api.routes_jobs import health_router as health_router
 from app.api.routes_workspace import router as workspace_router
 from app.api.routes_ws import router as ws_router
+# Chat voice mode. A SEPARATE module from routes_ws by design (§L1) so voice
+# work cannot regress the Live interview endpoint.
+from app.api.routes_voice_ws import router as voice_ws_router
 from app.api.routes_live import router as live_router
 from app.core.config_loader import cfg, get_config
 import asyncio
@@ -228,6 +231,17 @@ async def _bootstrap_llm_routing(migration_task: "asyncio.Task") -> None:
                 log.info("llm routing: seeded the local model floor (T4).")
         except Exception:  # noqa: BLE001
             log.debug("local floor seed failed", exc_info=True)
+        # Install the echo canceller into the shared AEC seam. No-op unless
+        # `voice.native_aec` is on, so default behaviour is byte-identical. It
+        # matters most under the realtime voice engine: there is no locally-known
+        # reply text there, so the text echo guard cannot run and acoustic
+        # cancellation is what makes speaker barge-in possible at all.
+        try:
+            from app.voice.aec import install as _install_aec
+            if _install_aec():
+                log.info("voice: acoustic echo canceller installed.")
+        except Exception:  # noqa: BLE001
+            log.debug("aec install skipped", exc_info=True)
         # Flag discovered multimodal models so image turns can route across the
         # user's FULL configured catalog, not just the curated vision models.
         vis = await backfill_vision_flags()
@@ -611,6 +625,7 @@ app.include_router(sandbox_router)
 app.include_router(jobs_router)
 app.include_router(health_router)
 app.include_router(ws_router)
+app.include_router(voice_ws_router)
 app.include_router(live_router)
 app.include_router(agents_router)
 app.include_router(projects_router)

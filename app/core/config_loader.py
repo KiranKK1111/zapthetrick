@@ -1211,6 +1211,26 @@ class EvalSection(BaseModel):
     canary_margin: float = 0.02
 
 
+class VoiceBudgetConfig(BaseModel):
+    """Spend ceilings for the metered realtime engine (Requirement 9).
+
+    All ceilings default to ZERO, so a fresh checkout cannot incur cost even if
+    someone sets `engine: realtime`: a zero ceiling means "no budget remaining"
+    and the selection policy refuses realtime. Raising these is a deliberate act.
+    """
+    daily_usd: float = 0.0
+    monthly_usd: float = 0.0
+    session_minutes: float = 15.0
+    # Fraction of a ceiling at which the UI is told (Requirement 9.3).
+    warn_at: float = 0.8
+    # Per-1M-token prices used to convert metered usage into dollars. Published
+    # figures vary and change, so these are config rather than constants: a price
+    # change is an edit, not a release.
+    audio_input_per_mtok: float = 32.0
+    audio_output_per_mtok: float = 64.0
+    cached_input_per_mtok: float = 0.4
+
+
 class VoiceSection(BaseModel):
     """Stage-10 voice & ambient. Spoken responses (`tts`), wake-word conversation
     loop (`loop`/`wake_word`), semantic+prosodic turn-taking (`conversational_intel`),
@@ -1239,6 +1259,46 @@ class VoiceSection(BaseModel):
     emotion: bool = False
     emotion_mode: str = "local"       # local | cloud (consent-gated §9.9/§E.1)
     multilingual: bool = False
+
+    # ── realtime-voice-mode (design §"Data Models") ──────────────────────────
+    # Which VoiceEngine serves the chat voice surface. Supersedes `s2s_engine`,
+    # which is still read for one release and mapped ("omni" -> "realtime").
+    #   staged   — the local cascade. Default. No credential, no spend.
+    #   realtime — a speech-native cloud session (needs `realtime_model` + key).
+    #   auto     — realtime when credential + reachability + budget allow,
+    #              else staged.
+    engine: str = "staged"            # auto | realtime | staged
+    # Empty => realtime is NEVER selected, whatever `engine` says. This is the
+    # hard interlock that makes default metered spend exactly zero.
+    realtime_model: str = ""
+    realtime_base_url: str = "wss://api.openai.com/v1/realtime"
+    realtime_api_key: str = ""        # falls back to the provider key store
+    # How the speech model decides you have finished speaking.
+    #   semantic_vad — the MODEL judges whether the thought is complete. This is
+    #     what stops a natural mid-sentence pause ("so the thing is… uh…") from
+    #     being treated as the end of your turn, and it is the single biggest
+    #     reason ChatGPT's voice mode does not talk over you.
+    #   server_vad   — a fixed silence timer. Predictable, and it interrupts
+    #     thinkers. Kept as the fallback for endpoints without semantic VAD.
+    realtime_turn_detection: str = "semantic_vad"   # semantic_vad | server_vad
+    # How readily the model takes its turn under semantic VAD:
+    # low = waits longer (good for slow, considered speech),
+    # high = replies sooner, auto = the model balances it.
+    realtime_eagerness: str = "auto"                # low | medium | high | auto
+    # Silence timer for the server_vad fallback only.
+    realtime_silence_ms: int = 500
+    # Upstream noise suppression on the mic. near_field suits a laptop/headset;
+    # far_field suits a room mic. Empty disables it.
+    realtime_noise_reduction: str = "near_field"    # near_field | far_field | ''
+    # Upstream transcription model for what the USER said.
+    realtime_transcribe_model: str = "whisper-1"
+    budget: VoiceBudgetConfig = Field(default_factory=VoiceBudgetConfig)
+    # Phase 4 — admit only the enrolled speaker's voice as a turn. Inert until
+    # an embedder exists; absent embedder => exactly current behaviour.
+    speaker_gate: bool = False
+    speaker_threshold: float = 0.65
+    # Client jitter buffer target. Widens automatically on observed underrun.
+    jitter_target_ms: int = 120
 
 
 class DeploySection(BaseModel):

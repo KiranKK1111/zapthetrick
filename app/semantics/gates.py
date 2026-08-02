@@ -231,6 +231,18 @@ GATES: dict[str, dict] = {
             "walk me through your approach",
             "give me an example of that",
             "tell me about your current project",
+            # "Tell me about <TOPIC>" is the most canonical interview prompt
+            # there is, and it was being vetoed as the interviewer offering to
+            # speak. The direction is what separates these from the positives:
+            # "let me tell you about the team" (they talk) versus "tell me about
+            # X" (you talk). Same verb, opposite floor.
+            "tell me about blue-green deployment",
+            "tell me about race conditions",
+            "tell me about how you would design this",
+            "tell me about a time you disagreed with a teammate",
+            "talk me through your understanding of database indexing",
+            "take me through the internals of a hashmap",
+            "show me how you would structure the schema",
             "describe a time you had a conflict with a teammate",
             "explain how kafka handles ordering",
             "talk to me about scaling",
@@ -252,6 +264,25 @@ GATES: dict[str, dict] = {
             "elaborate on that a bit",
             "give me an example of that",
             "i'd love to hear how you'd handle it",
+            # Indirect requests: STATEMENTS in form, requests in function. The
+            # interviewer never says "?" here and no interrogative opens the
+            # clause, so the deterministic path cannot see them — this gate is
+            # the only thing standing between these and a silent turn. (The
+            # 4213-row live corpus put 99 misses in exactly this family.)
+            "i am curious how you would approach memory leaks",
+            "i'm curious what you'd do differently",
+            "maybe you could say a little about hashmaps",
+            "perhaps you could tell me a bit about your last project",
+            "i would like to hear your thoughts on database indexing",
+            "i want to understand your experience with kubernetes",
+            "it would be great if you could cover the caching layer",
+            "it'd be good to hear how you tested that",
+            "let us talk about your approach to code review",
+            "i'm interested in how you handled the migration",
+            "i wonder how you would scale that",
+            "feel free to describe the architecture you chose",
+            "say a bit more about the tradeoffs",
+            "help me understand why you picked that database",
         ],
         "negatives": [
             "that makes sense",
@@ -261,6 +292,21 @@ GATES: dict[str, dict] = {
             "let me check my notes",
             "we're running a bit short on time",
             "great, sounds good",
+            # CONTEXT STATEMENTS about the company/stack. Topically identical to
+            # a real question ("...about kafka") and lexically close to one, but
+            # the interviewer is INFORMING, not asking. Answering here talks over
+            # them, which is the worst failure mode in a live interview.
+            "in our organization we use kafka extensively",
+            "we mainly build our services around microservices",
+            "most of our stack is python these days",
+            "we had a lot of incidents caused by database sharding",
+            "the platform team owns kubernetes internally",
+            "our team migrated away from mongodb last year",
+            "that role would sit close to the payments group",
+            "historically we avoided microservices for good reasons",
+            "i used to work on something similar myself",
+            "bear with me, the room booking ran over",
+            "let me think about how to phrase this",
             # The INTERVIEWER offering to speak — surface-similar to "tell me
             # about X" / "walk me through X" but the opposite direction: they
             # are about to talk, so answering talks OVER their introduction.

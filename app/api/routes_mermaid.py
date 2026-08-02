@@ -15,27 +15,14 @@ import re
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+# The repair contract lives with the diagram domain logic; imported here
+# (not the other way round) so `app/diagrams` never depends on a route.
+from app.diagrams.repair_contract import _REPAIR_PROMPT, _strip_fences
+
 router = APIRouter(prefix="/api/mermaid", tags=["mermaid"])
 
 # The doc's repair contract, verbatim in spirit: fix ONLY the syntax, keep the
 # architecture, return only mermaid.
-_REPAIR_PROMPT = (
-    "The following Mermaid diagram failed compilation.\n\n"
-    "Parser error:\n{error}\n\n"
-    "Mermaid source:\n```mermaid\n{source}\n```\n\n"
-    # NOTE: this string goes through `str.format`, so every literal brace below
-    # must be doubled — a stray `{` raises KeyError and silently costs the repair.
-    "Fix ONLY the syntax. Do NOT change the architecture, the nodes, the "
-    "labels' meaning, or the layout direction. Common REAL fixes: wrap a label "
-    "containing `(`, `)`, `\"`, `|`, `{{` or `}}` in double quotes "
-    "(A[\"Fetch (REST)\"]); close every `subgraph` with `end`; give every link "
-    "an arrowhead or terminator (`A --> B` or `A --- B`, never `A -- B`); use at "
-    "least two dashes (`-->`, not `->`); declare nodes as `ID[\"Label\"]`.\n"
-    "Do NOT 'fix' these — they are VALID mermaid: `--->` and `----` (extra "
-    "dashes just set the rank distance), and `:`, `#`, `<`, `>`, `;`, `&`, `%` "
-    "inside an unquoted label.\n"
-    "Return ONLY the corrected Mermaid code, with no fences and no commentary."
-)
 
 
 class MermaidRepairRequest(BaseModel):
@@ -48,13 +35,6 @@ class MermaidRepairResponse(BaseModel):
     changed: bool
 
 
-def _strip_fences(text: str) -> str:
-    """The model sometimes fences the reply anyway — unwrap it."""
-    t = (text or "").strip()
-    m = re.search(r"```(?:mermaid)?\s*\n(.*?)```", t, re.DOTALL)
-    if m:
-        t = m.group(1).strip()
-    return t
 
 
 @router.post("/repair", response_model=MermaidRepairResponse)
@@ -81,3 +61,39 @@ async def repair(req: MermaidRepairRequest) -> MermaidRepairResponse:
     if not fixed or len(fixed) < 8:
         return MermaidRepairResponse(source=req.source, changed=False)
     return MermaidRepairResponse(source=fixed, changed=fixed != src)
+
+
+class MermaidVerifyRequest(BaseModel):
+    source: str = Field(..., max_length=20_000)
+    # Off ⇒ report only. On ⇒ attempt an LLM syntax repair and re-verify.
+    repair: bool = True
+
+
+class MermaidVerifyResponse(BaseModel):
+    ok: bool
+    source: str
+    errors: list[str] = []
+    warnings: list[str] = []
+    repairs: int = 0
+    stages: list[str] = []
+    sandbox_available: bool = True
+
+
+@router.post("/verify", response_model=MermaidVerifyResponse)
+async def verify_diagram(req: MermaidVerifyRequest) -> MermaidVerifyResponse:
+    """Validate → verify in the sandbox → repair → re-verify, BEFORE rendering.
+
+    The webview remains the authoritative parser; this exists so a user who
+    pastes Mermaid does not have to watch it fail first. A diagram that cannot
+    be fixed comes back unchanged with its diagnostics rather than replaced by
+    something invented — a wrong diagram is worse than a broken one, because the
+    user cannot tell it is wrong.
+    """
+    from app.diagrams.verify import verify as _verify
+
+    report = await _verify(req.source, repair=bool(req.repair))
+    return MermaidVerifyResponse(
+        ok=report.ok, source=report.source, errors=report.errors,
+        warnings=report.warnings, repairs=report.repairs,
+        stages=report.stages, sandbox_available=report.sandbox_available,
+    )

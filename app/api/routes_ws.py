@@ -380,308 +380,22 @@ def _coaching_tips(text: str) -> list[str]:
         return []
 
 
-# Non-lexical vocalizations / backchannels that must NOT take a conversational
-# turn on their own (VoiceModeArchitecture.md §"First Real Word Rule" /
-# §"recognized_word_count >= 1"): a cough, throat-clear, or "uh" the recognizer
-# renders as a lone token should be ignored, not answered. This is a lexical
-# floor — a genuine closed set, like number/date normalization — NOT intent
-# classification, so it stays literal. Only clear fillers are listed; real short
-# replies ("yes", "no", "stop", a single technical term) deliberately pass.
-_VOICE_FILLERS = frozenset({
-    "uh", "um", "umm", "uhh", "uhm", "hmm", "hm", "hmmm", "mm", "mmm",
-    "mhm", "mmhm", "mmhmm", "mm-hmm", "uh-huh", "uhhuh",
-    "ah", "ahh", "aha", "huh", "eh", "er", "err", "erm",
-})
-# Letter-runs in ANY script (re.UNICODE) so Hindi/Telugu/etc. words count as
-# words; digits/punctuation are excluded so "." or "?" alone is not "a word".
-_VOICE_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+# The chat VOICE MODE endpoint used to live here, immediately above /ws/live.
+# It now lives in `app/api/routes_voice_ws.py` (realtime-voice-mode design §L1):
+# sharing one file meant every voice change edited the file Live lives in, so
+# voice work structurally endangered Live. Ending that adjacency is the first
+# requirement of that design, not a cleanup.
+#
+# The first-real-word gate that supported it moved to `app/voice/turn_gate.py`.
+# The alias below keeps any caller that imported it from here working; it is a
+# one-line delegation, and NOTHING under app/live/ may import app.voice.
 
 
 def _voice_is_meaningful(text: str) -> bool:
-    """True when a final transcript is worth taking a conversational turn.
+    """Deprecated alias — see `app.voice.turn_gate.is_meaningful`."""
+    from app.voice.turn_gate import is_meaningful
+    return is_meaningful(text)
 
-    Rejects empty / punctuation-only strings and lone backchannels/fillers so a
-    cough or an "uh" can't launch a turn. Any multi-word utterance passes — a
-    filler can legitimately open a real sentence ("uh, what is Kafka?")."""
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    words = _VOICE_WORD_RE.findall(t)
-    if not words:
-        return False  # punctuation / digits only (".", "?")
-    if len(words) == 1:
-        w = words[0]
-        if w in _VOICE_FILLERS:
-            return False
-        # A lone stray ASCII letter ("a", "o") is STT noise, not a turn; a
-        # one-character non-Latin word (CJK / Indic base glyph) IS a real word,
-        # so the length floor is ASCII-only — never penalize Hindi/Telugu/etc.
-        return not (len(w) == 1 and w.isascii())
-    # Two+ words: ignore only if EVERY token is a filler ("uh um", "mm hmm").
-    return not all(w in _VOICE_FILLERS for w in words)
-
-
-@router.websocket("/ws/voice")
-async def voice_ws(
-    websocket: WebSocket,
-    token: str | None = Query(default=None),
-):
-    """Chat VOICE MODE — streaming transcription with the SAME server-side Silero
-    VAD + adaptive turn-detection as the interview WS (`AudioStreamSegmenter`),
-    but it ONLY transcribes: the client drives the conversational answer + neural
-    TTS from the `transcript` frames. This replaces the naive client-side energy
-    VAD, so background noise never takes a turn and natural mid-sentence pauses
-    don't cut the user off (ChatGPT-style turn detection).
-
-    Up: raw int16 PCM (mono, 16 kHz) binary frames; JSON control {"type":"stop"|
-    "flush"}. Down: {"type":"ready"|"partial"|"transcript"|"error"}.
-    """
-    from app.api.auth import authenticate_ws
-    from storage.context import current_user_id_var
-    _uid, _err = authenticate_ws(token)
-    if _err is not None:
-        await websocket.close(code=1008)  # policy violation
-        return
-    # Bind the DEVICE user in auth-off mode (not None) so WS-path scoping matches
-    # HTTP + resolve_user_id() — otherwise router/cache/catalog run under NULL.
-    from app.api.auth import ws_user_id
-    _bound = await ws_user_id(_uid)
-    if _bound:
-        current_user_id_var.set(_bound)
-    await websocket.accept()
-
-    _send_lock = asyncio.Lock()
-
-    async def _send(obj: dict) -> None:
-        try:
-            async with _send_lock:
-                await websocket.send_json(obj)
-        except Exception:  # noqa: BLE001
-            pass
-
-    # (1a) VOCABULARY / CONTEXT BIASING for voice STT. The live path biases
-    # Whisper with the session's recent questions; voice had NO biasing at all,
-    # so technical terms and names decoded worse here than in Live. Bias with the
-    # configured seed plus THIS conversation's own recent turns — the decoder
-    # adapts to what's actually being discussed (doc §"Domain-specific
-    # terminology correction" / "Vocabulary adaptation"). Bounded: Whisper's
-    # prompt budget is ~224 tokens, so only the last few turns are used.
-    _recent_turns: list[str] = []
-
-    def _voice_bias_prompt() -> str | None:
-        seed = (getattr(cfg.stt, "prompt", "") or "").strip()
-        if _recent_turns:
-            seed = (seed + " Recent: " + " ".join(_recent_turns[-3:])).strip()
-        return seed or None
-
-    # (3) The client reports when the assistant is SPEAKING, so a transcript
-    # heard during playback can be classified as interrupt-vs-backchannel. Only
-    # then — a normal listening turn pays no classification latency.
-    _speaking = {"on": False}
-
-    def _voice_emotion(t: str, audio) -> str:
-        """Advisory emotion read from cheap prosody proxies (energy + rate +
-        filler ratio) over THIS utterance's audio — so the reply can match the
-        user's tone ("you sound rushed/stressed"). Fail-open → ''."""
-        try:
-            import numpy as np
-            from app.live import emotion as _emo
-            arr = np.asarray(audio, dtype="float32").reshape(-1)
-            if arr.size < 1600:  # <0.1s — nothing to read
-                return ""
-            energy = float(min(1.0, np.sqrt(np.mean(arr * arr)) * 6.0))
-            dur_s = arr.size / 16000.0
-            words = [w for w in t.lower().split() if w]
-            rate = float(min(1.0, (len(words) / dur_s) / 4.0)) if dur_s else 0.0
-            fillers = sum(1 for w in words if w.strip(".,?!") in
-                          ("uh", "um", "hmm", "like", "erm"))
-            fr = fillers / len(words) if words else 0.0
-            sig = _emo.analyze(energy=energy, speech_rate=rate,
-                               filler_ratio=fr)
-            return sig.label if sig.label and sig.label != "neutral" else ""
-        except Exception:  # noqa: BLE001
-            return ""
-
-    async def _on_utterance(text: str, full: str | None = None) -> None:
-        t = (text or "").strip()
-        # First-real-word gate: a lone cough/"uh" that STT rendered as a token
-        # must not launch a turn (the "interrupts on small sounds" complaint).
-        if t and _voice_is_meaningful(t):
-            _recent_turns.append(t)
-            del _recent_turns[:-6]          # keep the tail bounded
-            frame = {"type": "transcript", "text": t}
-            _emo_label = _voice_emotion(t, full) if full is not None else ""
-            if _emo_label:
-                frame["emotion"] = _emo_label
-            if _speaking["on"]:
-                # SEMANTIC barge-in: is the user taking the floor, or just
-                # following along? Generalizes to paraphrases the client's word
-                # lists can't ("hang on a second", "no I follow you"). None ⇒
-                # undecided/embedder cold ⇒ the client's fallback decides.
-                try:
-                    from app.live.barge_in import classify_utterance
-                    verdict = await asyncio.to_thread(classify_utterance, t)
-                    if verdict:
-                        frame["barge"] = verdict
-                except Exception:  # noqa: BLE001
-                    pass
-            await _send(frame)
-
-    async def _on_partial(text: str) -> None:
-        t = (text or "").strip()
-        if not t:
-            return
-        # (2a) SEMANTIC COMPLETENESS on the partial. The client uses this to
-        # start answering SPECULATIVELY while the user is still finishing (doc
-        # §6 "Incremental Thinking"). Computed with the SAME `completeness()` the
-        # segmenter's adaptive endpointing uses — including interrogative-lead
-        # detection for questions the ASR left un-'?'-ed — so the client never
-        # needs its own heuristic. Fail-open: absent/false ⇒ no speculation.
-        complete = False
-        try:
-            from app.live.hypothesis import completeness as _completeness
-            complete = _completeness(t) == "complete"
-        except Exception:  # noqa: BLE001
-            complete = False
-        await _send({"type": "partial", "text": t, "complete": complete})
-
-    # (1b) Surface a swallowed STT failure/empty so a dead mic is EXPLAINABLE
-    # instead of silently producing nothing (live already did this; voice didn't).
-    async def _on_stt_status(kind: str, detail: str) -> None:
-        await _send({"type": "stt_status", "state": kind, "detail": detail})
-
-    # (1c) Pre-open the answer provider's connection WHILE the user is still
-    # talking, so the reply's first request never pays TLS setup. Rate-limited
-    # inside warm_live_provider's caller — one warm per ~20s covers a turn.
-    from time import monotonic as _mono
-    _warm_at = {"t": 0.0}
-
-    async def _on_speech_start() -> None:
-        now = _mono()
-        if now - _warm_at["t"] < 20.0:
-            return
-        _warm_at["t"] = now
-        try:
-            from app.perceived.prefetch import warm_live_provider
-            await warm_live_provider()
-        except Exception:  # noqa: BLE001
-            pass  # warming is best-effort — never affect the turn
-
-    from app.audio.stream import AudioStreamSegmenter
-    segmenter = AudioStreamSegmenter(on_utterance=_on_utterance,
-                                     on_partial=_on_partial,
-                                     prompt_provider=_voice_bias_prompt,
-                                     on_stt_status=_on_stt_status,
-                                     on_speech_start=_on_speech_start)
-
-    # DUPLEX AUDIO-OUT (Flow 1, 2026-07-28): the client sends
-    # {"type":"speak","seq":n,"text":...} chunks and receives synthesized audio
-    # back over THIS socket — {"type":"audio","seq","gen"} JSON immediately
-    # followed by a binary MP3 frame. Synthesis runs ON the pod (Kokoro →
-    # Edge fallback via tts_synth), replacing the old per-sentence HTTP POST →
-    # temp file → new player round trip. Barge-in: {"type":"stop_speaking"}
-    # bumps the GENERATION and drains the queue, so any in-flight or queued
-    # chunk from the interrupted reply is dropped — audio stops arriving
-    # immediately, matching the doc's "cancel remaining speech generation".
-    # A speech-native engine (app/live/s2s.py) later replaces what feeds this
-    # queue; the frames — and the FE — stay identical.
-    _speak_q: asyncio.Queue = asyncio.Queue()
-    _speak_gen = {"n": 0}
-
-    async def _speak_worker() -> None:
-        while True:
-            seq, gen, text, voice, speed = await _speak_q.get()
-            if gen != _speak_gen["n"]:
-                continue  # from a barged-in (stale) reply — drop silently
-            audio = b""
-            try:
-                from app.live import tts_synth
-                if voice:
-                    audio = await tts_synth.synthesize(text, voice, speed=speed)
-                else:
-                    audio = await tts_synth.synthesize(text, speed=speed)
-            except Exception:  # noqa: BLE001
-                audio = b""
-            if gen != _speak_gen["n"]:
-                continue  # barged in while synthesizing — never play stale audio
-            try:
-                if audio:
-                    # Meta + binary under ONE lock hold so no other frame can
-                    # interleave between them (the FE pairs them by order).
-                    async with _send_lock:
-                        await websocket.send_json(
-                            {"type": "audio", "seq": seq, "gen": gen,
-                             "bytes": len(audio)})
-                        await websocket.send_bytes(bytes(audio))
-                else:
-                    # Honest failure → the FE falls back to its HTTP TTS path
-                    # for this chunk instead of silently losing speech.
-                    await _send({"type": "speak_error", "seq": seq, "gen": gen})
-            except Exception:  # noqa: BLE001 — socket closing; loop exits via cancel
-                pass
-
-    _speak_task = asyncio.create_task(_speak_worker())
-    await _send({"type": "ready"})
-    try:
-        while True:
-            msg = await websocket.receive()
-            if msg.get("type") == "websocket.disconnect":
-                break
-            if msg.get("bytes") is not None:
-                chunk = _decode_pcm(msg["bytes"])
-                if chunk is not None and chunk.size:
-                    await segmenter.push(chunk)
-                continue
-            txt = msg.get("text")
-            if txt:
-                try:
-                    ctrl = json.loads(txt)
-                except Exception:  # noqa: BLE001
-                    ctrl = {}
-                _t = str(ctrl.get("type") or "")
-                if _t in ("stop", "close"):
-                    break
-                if _t == "flush":
-                    try:
-                        await segmenter.flush()  # finalize the current utterance
-                    except Exception:  # noqa: BLE001
-                        pass
-                elif _t == "assistant_speaking":
-                    # Playback state (3): while true, a finalized transcript is
-                    # semantically classified interrupt-vs-backchannel.
-                    _speaking["on"] = bool(ctrl.get("value"))
-                elif _t == "speak":
-                    # Duplex audio-out: queue a chunk for on-pod synthesis. The
-                    # frame carries the user's CHOSEN voice + speed — without
-                    # them the pod spoke the default voice regardless of
-                    # Settings (the "two voices"/wrong-voice report).
-                    _txt = str(ctrl.get("text") or "").strip()
-                    if _txt:
-                        _speak_q.put_nowait((int(ctrl.get("seq") or 0),
-                                             _speak_gen["n"], _txt,
-                                             str(ctrl.get("voice") or ""),
-                                             float(ctrl.get("speed") or 1.0)))
-                elif _t == "stop_speaking":
-                    # Barge-in: invalidate the generation + drain the queue —
-                    # nothing from the interrupted reply reaches the speaker.
-                    _speak_gen["n"] += 1
-                    while not _speak_q.empty():
-                        try:
-                            _speak_q.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-                    await _send({"type": "speech_stopped",
-                                 "gen": _speak_gen["n"]})
-    except WebSocketDisconnect:
-        pass
-    except Exception:  # noqa: BLE001
-        pass
-    finally:
-        _speak_task.cancel()
-        try:
-            await segmenter.flush()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 @router.websocket("/ws/live")
@@ -2193,6 +1907,19 @@ async def live_listen(
                         continue
                     if ev.kind == "token":
                         answer_text += str(ev.data.get("text", ""))
+                        # Register the answer PREFIX as it streams. Waiting for
+                        # the finished text meant a candidate reading along —
+                        # which they do WHILE it arrives — matched nothing, got
+                        # transcribed, and was answered as a new question. The
+                        # assistant interrupted them to answer its own words.
+                        # Cheap: re-embeds roughly once per sentence, not per
+                        # token, and fail-open.
+                        if getattr(cfg.live, "candidate_echo_skip", False):
+                            try:
+                                from app.live import echo as _echo_s
+                                _echo_s.remember_streaming(sid or "", answer_text)
+                            except Exception:  # noqa: BLE001
+                                pass
                     await send({"type": ev.kind, "qid": qid, **ev.data})
                 if _timed_out:
                     import contextlib as _ctx
@@ -2348,6 +2075,7 @@ async def live_listen(
                         try:
                             from app.live import echo as _echo2
                             _echo2.remember_answer(sid or "", answer_text)
+                            _echo2.reset_streaming(sid or "")
                         except Exception:  # noqa: BLE001
                             pass
                     # Snapshot the in-process conversational state (tracker

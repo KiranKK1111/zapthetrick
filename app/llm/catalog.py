@@ -597,6 +597,12 @@ async def seed_local_provider() -> int:
         return 0
     from sqlalchemy import select
 
+    # `cfg` is used below for the optional small tier. It was NOT imported here,
+    # so this function raised NameError on every call — and its only caller
+    # swallows exceptions at debug level, so the never-empty ladder's T4 rung
+    # was never seeded on ANY deployment and "No LLM route available" stayed
+    # reachable with a healthy local model running.
+    from app.core.config_loader import cfg
     from storage.db import get_session_factory
     from storage.models import LLMFallbackConfig, LLMModel
 

@@ -48,6 +48,72 @@ _CODING_HINTS = lexicons.QD_CODING_HINTS
 _BEHAVIORAL_HINTS = lexicons.QD_BEHAVIORAL_HINTS
 _SMALLTALK_HINTS = lexicons.QD_SMALLTALK_HINTS
 _FOLLOWUP_STARTERS = lexicons.QD_FOLLOWUP_STARTERS
+_AUXILIARIES = frozenset(lexicons.QD_AUXILIARIES)
+_IMPERATIVE_PROMPTS = lexicons.QD_IMPERATIVE_PROMPTS
+
+# Openers that are genuinely two-faced: the SAME words open a request for an
+# answer and a piece of the speaker's own housekeeping. "Give me an example of
+# Kafka" asks; "give me one moment, my screen froze" does not. Only these get
+# the semantic floor-holding veto — applying it to wh-words discarded real
+# questions.
+_AMBIGUOUS_OPENERS = ("give me", "tell", "walk", "let me", "show me", "run me",
+                      "take me", "talk me", "help me understand")
+
+# Clause boundaries: a comma, or a coordinating conjunction that joins two
+# independent clauses. Splitting on these is what lets an interrogative be found
+# where it actually sits rather than only at position 0.
+_CLAUSE_SPLIT = re.compile(r"[,;]|\s+(?:and|but|or|so|then)\s+")
+_WORD = re.compile(r"[a-z0-9']+")
+
+# Tokens that may follow an inverted auxiliary and still leave it a question.
+# A determiner/pronoun/quantifier after "is"/"does" marks subject-auxiliary
+# inversion ("is THE cache…", "does IT scale"). Without this guard a statement
+# beginning on an auxiliary would read as a question.
+_SUBJECT_LEAD = frozenset({
+    "a", "an", "the", "this", "that", "these", "those", "it", "he", "she",
+    "they", "we", "you", "i", "there", "your", "my", "our", "his", "her",
+    "their", "its", "any", "all", "some", "every", "each", "most", "one",
+    "two", "both", "either", "neither", "no", "another", "such",
+})
+
+
+# A follow-up opens on a conjunction and continues the prior thread ("And what
+# about failures", "So how does that scale"). Stripping it exposes the
+# interrogative underneath; without this the whole utterance reads as starting
+# on "and" and the question is invisible.
+_LEADING_CONJ = re.compile(r"^(?:and|but|or|so|then|also|okay|ok|alright|now)\b[\s,]*")
+
+
+def _clauses(t: str) -> list[str]:
+    """Split an utterance into clauses. Always returns at least the whole text,
+    so a clause-free utterance behaves exactly as before."""
+    parts = [p.strip() for p in _CLAUSE_SPLIT.split(t) if p and p.strip()]
+    out = []
+    for p in parts or [t]:
+        out.append(p)
+        stripped = _LEADING_CONJ.sub("", p, count=1).strip()
+        if stripped and stripped != p:
+            out.append(stripped)
+    return out
+
+
+def _opens_with(clause: str, openers) -> bool:
+    return any(clause.startswith(w + " ") or clause.startswith(w + "'")
+               or clause == w for w in openers)
+
+
+def _is_inverted(clause: str) -> bool:
+    """Subject-auxiliary inversion: AUX + (subject-ish token). English's other
+    way of asking without a wh-word, and invisible once STT drops the '?'."""
+    words = _WORD.findall(clause)
+    if len(words) < 3 or words[0] not in _AUXILIARIES:
+        return False
+    nxt = words[1]
+    # A pronoun/determiner subject, or a capitalized-in-speech topic noun that is
+    # not itself another verb — approximated as "not a second auxiliary", which
+    # keeps "is is" style STT noise out.
+    return nxt in _SUBJECT_LEAD or nxt not in _AUXILIARIES
+
 
 def heuristic_classify(text: str) -> QuestionMeta:
     """Pattern-only classification. Always returns a meta with `source='heuristic'`."""
@@ -56,16 +122,40 @@ def heuristic_classify(text: str) -> QuestionMeta:
         return QuestionMeta(False, "unknown", False, "", 0.1, "heuristic")
 
     by_mark = t.endswith("?")
-    by_prefix = any(t.startswith(w + " ") or t.startswith(w + "'")
-                    for w in _INTERROGATIVES)
-    is_question = by_mark or by_prefix
+    # An interrogative opens a CLAUSE, not only the utterance. "Say you inherit
+    # a system using Kafka, where do you start" is a question whose interrogative
+    # is the second clause; matching only at position 0 missed every utterance of
+    # that shape, and with STT dropping the '?' the interviewer got no answer at
+    # all. Clauses are split on commas and coordinating conjunctions — cheap,
+    # deterministic, and it generalizes instead of enumerating phrasings.
+    clauses = _clauses(t)
+    by_prefix = any(_opens_with(c, _INTERROGATIVES) for c in clauses)
+    # Subject-auxiliary inversion — the other way English forms a question
+    # without a wh-word ("Is Kafka durable", "Does it scale horizontally").
+    # Requires a following subject token so a statement that merely starts on a
+    # verb ("Is is a keyword...") does not qualify.
+    by_inversion = any(_is_inverted(c) for c in clauses)
+    # Imperative prompts that request an answer or an artifact ("Write a function
+    # that…", "Talk me through…", "Rate your comfort with…"). These never carry
+    # a '?' and are a large share of what an interviewer actually says.
+    by_imperative = any(_opens_with(c, _IMPERATIVE_PROMPTS) for c in clauses)
+    is_question = by_mark or by_prefix or by_inversion or by_imperative
+    # Did the match come ONLY from a two-faced imperative opener? That is the
+    # single case where a semantic floor-holding veto is warranted (below).
+    _ambiguous = (by_prefix or by_imperative) and any(
+        _opens_with(c, _AMBIGUOUS_OPENERS) for c in clauses)
     # `_INTERROGATIVES` holds imperative openers too ("give me", "tell me"), so
     # the speaker handling their OWN business trips them: "give me one moment,
     # my screen froze" is not a question. Veto semantically — a literal list
     # cannot separate "give me one moment" from "give me an example". Only
     # consulted for a PREFIX match with no '?' (a minority of utterances), so
     # the hot path is unaffected; fail-open ⇒ today's behaviour.
-    if by_prefix and not by_mark:
+    # Scoped to the AMBIGUOUS openers only. "give me"/"tell"/"walk" are genuinely
+    # two-faced — "give me an example" asks, "give me one moment" does not — so a
+    # semantic veto earns its place there. A wh-word or an inversion is not
+    # ambiguous, and vetoing those cost real questions ("How do you debug an
+    # issue with write-ahead logging" was being discarded as floor-holding).
+    if _ambiguous and not by_mark and not by_inversion:
         try:
             from app.live.implicit import holds_floor
             if holds_floor(t):
@@ -110,10 +200,22 @@ def heuristic_classify(text: str) -> QuestionMeta:
     # while "What is X?" scored 0.7). A terminal '?' is the strongest question
     # signal there is; an unnamed topic says nothing about whether it's a
     # question. Measured by app/eval/live_bench `fast_path_coverage`.
-    if is_question and qtype != "unknown":
+    #
+    # A '?' is not the ONLY unambiguous signal. A clause-leading interrogative
+    # ("…, where do you start"), subject-auxiliary inversion ("Does it scale")
+    # and an imperative prompt ("Write a function that…") are grammatical facts,
+    # not guesses — and since STT drops the '?' constantly, they carry most of
+    # the recall. Scoring them 0.4 sent a correctly-detected question down the
+    # SLOW LLM-confirmation path and added a whole round-trip of latency to the
+    # answer, for nothing. Measured: fast_path_coverage on the 4213-row corpus.
+    #
+    # The SEMANTIC-only promotions (implicit/hypothetical gates) deliberately
+    # stay at 0.4. They are similarity judgements rather than grammar, they are
+    # where every remaining false positive comes from, and LLM confirmation is
+    # exactly what should adjudicate them.
+    _structural = by_mark or by_prefix or by_inversion or by_imperative
+    if is_question and (_structural or qtype != "unknown"):
         confidence = 0.7
-    elif is_question and by_mark:
-        confidence = 0.7      # explicit '?' — certain it's a question, type unnamed
     else:
         confidence = 0.4
     return QuestionMeta(is_question, qtype, is_followup, "", confidence,

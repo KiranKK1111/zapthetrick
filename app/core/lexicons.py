@@ -370,6 +370,31 @@ QD_INTERROGATIVES = (
     "can you", "could you", "would you", "have you", "did you", "do you",
     "why don't", "what's", "how's", "give me",
 )
+
+# Auxiliary/modal verbs that, placed before the subject, ARE the question in
+# English — "Is Kafka durable", "Does it scale", "Should every team adopt it".
+# Speech-to-text drops the terminal '?' constantly, so without this class an
+# un-punctuated yes/no question is invisible to the deterministic path and the
+# interviewer gets NO answer. This is a genuine CLOSED word class (English gains
+# no new auxiliaries), which is what makes it a lexical floor rather than
+# hardcoded intent detection — the semantic gates still refine on top.
+QD_AUXILIARIES = (
+    "is", "are", "was", "were", "am",
+    "do", "does", "did",
+    "have", "has", "had",
+    "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+)
+
+# Imperative openers that request an ANSWER or an artifact. Distinct from
+# QD_INTERROGATIVES because these are verbs of instruction rather than of
+# inquiry; an interviewer uses them constantly and none of them carry a '?'.
+QD_IMPERATIVE_PROMPTS = (
+    "write", "implement", "code", "sketch", "draw", "design", "build",
+    "rate", "talk me", "take me", "run me", "show me", "help me understand",
+    "given a", "given an", "given the", "consider", "assume", "suppose",
+    "imagine", "say you", "let's say", "lets say", "let us say",
+    "pretend", "picture",
+)
 QD_FOLLOWUP_STARTERS = (
     # A question that OPENS on a conjunction / back-reference continues the
     # prior thread ("And why is that?", "So how does that scale?", "But what

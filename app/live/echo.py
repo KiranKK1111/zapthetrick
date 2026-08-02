@@ -38,6 +38,56 @@ def remember_answer(sid: str, text: str) -> None:
         _ANSWERS[sid].append((text, vec))
 
 
+
+# How much the streaming answer must GROW before its prefix is re-registered.
+# Embedding per token would be absurd; per sentence-ish keeps a read-along
+# matchable from the first sentence onward at negligible cost.
+_PARTIAL_STEP = 140
+# Per-session high-water mark of what has already been registered while
+# streaming, so growth is measured rather than re-embedded from scratch.
+_PARTIAL_AT: "dict[str, int]" = {}
+
+
+def remember_streaming(sid: str, text: str) -> bool:
+    """Register the answer PREFIX while it is still streaming.
+
+    Registering only the FINISHED answer carries two bugs, and both bite in
+    exactly the reported scenario — a candidate reading the answer aloud in solo
+    mode while it is still arriving:
+
+    1. **Timing.** The read-along starts before the answer completes, so at that
+       moment nothing is registered and the echo check has nothing to match
+       against. The utterance gets transcribed and answered as a new question —
+       the assistant interrupts the candidate to answer its own words back.
+    2. **Partial reads.** Someone who reads only the opening of a long answer is
+       not very similar to the WHOLE answer, so a single final-text entry can
+       score below threshold. A prefix, though, is highly similar to the prefix
+       that was read.
+
+    Registering prefixes as they grow fixes both. Returns whether anything was
+    recorded — the caller does not care, but it makes the behaviour testable.
+    """
+    text = (text or "").strip()
+    if not sid or len(text) < 12:
+        return False
+    with _LOCK:
+        last = _PARTIAL_AT.get(sid, 0)
+        if len(text) - last < _PARTIAL_STEP:
+            return False
+        _PARTIAL_AT[sid] = len(text)
+    remember_answer(sid, text)
+    return True
+
+
+def reset_streaming(sid: str) -> None:
+    """Clear the growth mark at the end of a turn, so the next answer registers
+    from its own beginning rather than inheriting this one's length."""
+    if not sid:
+        return
+    with _LOCK:
+        _PARTIAL_AT.pop(sid, None)
+
+
 def is_candidate_echo(
     sid: str, utterance: str, threshold: float = 0.72
 ) -> "tuple[bool, float]":
@@ -99,3 +149,4 @@ def best_match(sid: str, utterance: str) -> "tuple[str, float]":
 def forget_session(sid: str) -> None:
     with _LOCK:
         _ANSWERS.pop(sid, None)
+        _PARTIAL_AT.pop(sid, None)

@@ -1237,13 +1237,60 @@ async def select_route(
                          degraded=["route_exhausted"])
 
 
+# Cached health of the local generation endpoint: (checked_at, reachable).
+# Probed rarely — the answer only changes when a server starts or stops.
+_LOCAL_HEALTH: "tuple[float, bool] | None" = None
+_LOCAL_HEALTH_TTL = 30.0
+
+
+async def local_endpoint_healthy() -> bool:
+    """Does the configured local base_url actually serve an OpenAI-style API?
+
+    An open PORT is not an LLM. On a dev box `127.0.0.1:8081` is as likely to be
+    a Tomcat, a Jupyter or a stale container as llama.cpp — and routing to it
+    produces the worst possible outcome: the T4 floor is chosen (it looks
+    available), returns HTML, fails, and the ladder exhausts with
+    "No LLM route available" while a perfectly good cloud model sat unused.
+
+    So the floor is admitted only when `/models` answers like the API it claims
+    to be. Cached, because this changes only when a server starts or stops.
+    """
+    global _LOCAL_HEALTH
+    import time as _t
+    now = _t.monotonic()
+    if _LOCAL_HEALTH is not None and now - _LOCAL_HEALTH[0] < _LOCAL_HEALTH_TTL:
+        return _LOCAL_HEALTH[1]
+    ok = False
+    try:
+        from app.core.config_loader import cfg
+        base = str(getattr(getattr(cfg.llm, "local", None), "base_url", "")
+                   or "").rstrip("/")
+        if base:
+            import httpx
+            async with httpx.AsyncClient(timeout=2.0) as c:
+                r = await c.get(base + "/models")
+            # A real OpenAI-compatible server returns JSON with a `data` list.
+            # HTML, a 404 page or anything unparseable means this is not it.
+            ok = r.status_code == 200 and isinstance(
+                (r.json() or {}).get("data"), list)
+    except Exception:  # noqa: BLE001 — unreachable/garbled ⇒ not healthy
+        ok = False
+    _LOCAL_HEALTH = (now, ok)
+    if not ok:
+        log.info("llm routing: local floor endpoint is not an OpenAI-style "
+                 "server — T4 will be skipped")
+    return ok
+
+
 async def _local_floor_route() -> RouteResult | None:
     """T4 floor (§2.1): a RouteResult for the always-available local model, or
-    None when the local runtime is disabled / not seeded. Anonymous (no key), no
-    rate limits. Never raises into the ladder."""
+    None when the local runtime is disabled / not seeded / not actually serving.
+    Anonymous (no key), no rate limits. Never raises into the ladder."""
     try:
         from app.llm.catalog import local_enabled
         if not local_enabled():
+            return None
+        if not await local_endpoint_healthy():
             return None
         factory = get_session_factory()
         if factory is None:

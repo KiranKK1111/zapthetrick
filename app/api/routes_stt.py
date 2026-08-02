@@ -172,13 +172,18 @@ async def transcribe_once(request: Request) -> dict:
     raw = await request.body()
     if not raw or len(raw) < 2:
         return {"text": ""}
+    # Optional decoding bias (?prompt=). The wake-word listener sends the phrase
+    # it is waiting for, so a coined name ("Hey Zappier") decodes as itself
+    # instead of a phonetic neighbour. Local engines that ignore prompts are
+    # unaffected.
+    prompt = (request.query_params.get("prompt") or "").strip() or None
     try:
         import numpy as np  # noqa: PLC0415
 
         audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
         from app.stt.factory import transcribe_async  # noqa: PLC0415
 
-        text = await transcribe_async(audio_np)
+        text = await transcribe_async(audio_np, prompt)
     except Exception as exc:  # noqa: BLE001 — never 500 the composer's mic
         log.warning("dictation transcribe failed: %s", exc)
         return JSONResponse({"text": "", "error": str(exc)}, status_code=200)

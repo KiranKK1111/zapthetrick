@@ -1,4 +1,29 @@
 """
+DEPRECATED — superseded by `app/voice/engine.py` (realtime-voice-mode §2).
+
+This turn-based seam (`turn(pcm16) -> AsyncIterator[(text, audio)]`) cannot host
+a speech-native model: it presupposes that somebody else already decided where
+the utterance ended — precisely the decision a realtime model makes better — and
+it has no channel for the model to say "the user started talking, I stopped", so
+native barge-in is inexpressible. `app.voice.engine.VoiceSession` replaces it
+with a SESSION-scoped contract where turn-taking authority moves with the engine.
+
+Nothing depends on this module today: no engine was ever registered, so
+`get_s2s()` has always returned None and the staged path has always run. It is
+kept as a shim for one release so a stray import stays safe, and is deleted once
+the migration completes. `cfg.voice.s2s_engine` is likewise still honoured —
+`app.voice.policy.configured_engine()` maps "omni" onto the new
+`voice.engine: realtime`.
+
+This file lives under `app/live/`, so reducing it to a shim is the ONE edit the
+voice design makes inside that package. It removes dead code, changes no Live
+behaviour, and is covered by the existing Live suite. Recorded explicitly rather
+than left implicit.
+
+---
+
+Original docstring follows.
+
 Speech-to-speech engine seam (Flow 1, 2026-07-28).
 
 The voice surface's duplex contract is: ONE WebSocket, audio (or text) up,

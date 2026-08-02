@@ -89,47 +89,29 @@ export ZAPTHETRICK_AUTH_MODE="${ZAPTHETRICK_AUTH_MODE:-native}"
 # Sign-in required to use the pod unless the operator opts out.
 export ZAPTHETRICK_AUTH_ENFORCE="${ZAPTHETRICK_AUTH_ENFORCE:-1}"
 
-# ---- 1) config.yaml on the volume — rendered from env once, then preserved ---
-if [ ! -f "$CFG" ]; then
-  echo "==> rendering $CFG from env (first boot on this volume)"
-  APP_PORT="$APP_PORT" PGPASS="$PGPASS" \
-  OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" NVIDIA_API_KEY="${NVIDIA_API_KEY:-}" \
-  LOCAL_LLM_ENABLED="$LOCAL_LLM_ENABLED" LOCAL_LLM_MODEL_ID="$LOCAL_LLM_MODEL_ID" \
-  LOCAL_LLM_PORT="$LOCAL_LLM_PORT" LOCAL_LLM_SMALL_MODEL_ID="$LOCAL_LLM_SMALL_MODEL_ID" \
-  "$VENV/bin/python" - "$APP_DIR/config.example.yaml" "$CFG" <<'PY'
-import os, sys, yaml
-src, dst = sys.argv[1], sys.argv[2]
-c = yaml.safe_load(open(src)) or {}
-c.setdefault('database', {}).setdefault('postgres', {}).update(
-    host='127.0.0.1', port=5432, db='postgres', schema_name='zapthetrick',
-    user='postgres', password=os.environ['PGPASS'], enable_age=False)
-c['database'].setdefault('cache', {})['url'] = 'redis://127.0.0.1:6379'
-c.setdefault('vision', {})['mode'] = 'local'
-c.setdefault('sandbox', {}).update(backend='local', enabled=True)
-c.setdefault('server', {}).update(host='0.0.0.0', port=int(os.environ['APP_PORT']))
-# Optional provider keys from env → so a fresh volume needs no UI to answer.
-if os.environ.get('OPENROUTER_API_KEY'):
-    c.setdefault('llm', {})['openrouter_api_key'] = os.environ['OPENROUTER_API_KEY']
-if os.environ.get('NVIDIA_API_KEY'):
-    c.setdefault('llm', {})['nvidia_api_key'] = os.environ['NVIDIA_API_KEY']
-# Local generation floor (§2.1 T4) — the app seeds an always-available local
-# model when this is on, so the never-empty ladder becomes structural.
-if os.environ.get('LOCAL_LLM_ENABLED') == '1':
-    _loc = c.setdefault('llm', {}).setdefault('local', {})
-    _loc.update(
-        enabled=True,
-        model_id=os.environ.get('LOCAL_LLM_MODEL_ID', 'qwen3-4b-instruct'),
-        base_url='http://127.0.0.1:%s/v1' % os.environ.get('LOCAL_LLM_PORT', '8081'))
-    # A4: register the optional small tier so the router can prefer it for
-    # trivial questions (only when LOCAL_LLM_SMALL_MODEL_ID is set).
-    if os.environ.get('LOCAL_LLM_SMALL_MODEL_ID'):
-        _loc['small_model_id'] = os.environ['LOCAL_LLM_SMALL_MODEL_ID']
-yaml.safe_dump(c, open(dst, 'w'), sort_keys=False)
-print('wrote', dst)
-PY
-else
-  echo "==> $CFG exists — preserving Settings/keys already configured"
-fi
+# ---- 1) config.yaml on the volume — MERGED with defaults on every boot -------
+# This used to be skip-if-exists: rendered once on first boot, then never touched
+# again. The consequence was silent and severe — every config key added after a
+# volume was created stayed invisible to that pod forever. A pod could run
+# `max_retries: 15` in the repo while actually using the code default of 6, and
+# the `llm.local` block that makes the never-empty routing ladder work was simply
+# absent, so the on-pod GPU model was never routable no matter what the image
+# contained.
+#
+# Now defaults are re-applied on EVERY boot and the volume's own file is
+# deep-merged ON TOP, so:
+#   * new keys from config.example.yaml appear (that is the whole fix);
+#   * anything the operator set — API keys, Settings, model picks — still wins;
+#   * pod-shaped infrastructure (DB, ports, sandbox backend) is forced AFTER the
+#     merge, because those describe THIS pod rather than a preference.
+# A timestamped backup is kept, so a bad merge is always recoverable.
+echo "==> merging $CFG with current defaults"
+APP_PORT="$APP_PORT" PGPASS="$PGPASS" \
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" NVIDIA_API_KEY="${NVIDIA_API_KEY:-}" \
+LOCAL_LLM_ENABLED="$LOCAL_LLM_ENABLED" LOCAL_LLM_MODEL_ID="$LOCAL_LLM_MODEL_ID" \
+LOCAL_LLM_PORT="$LOCAL_LLM_PORT" LOCAL_LLM_SMALL_MODEL_ID="$LOCAL_LLM_SMALL_MODEL_ID" \
+"$VENV/bin/python" "$APP_DIR/deploy/merge_config.py" \
+  "$APP_DIR/config.example.yaml" "$CFG"
 
 # ---- 2) Postgres: init on fresh disk, then RESTORE the latest dump if present -
 sudo mkdir -p "$PGDATA" && sudo chown postgres:postgres "$PGDATA"

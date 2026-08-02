@@ -14,6 +14,7 @@
   "(root) -> settings",
   "(root) -> stt",
   "(root) -> vision",
+  "(root) -> voice",
   "agent -> agent_workspace",
   "agent -> chat",
   "agent -> codegraph",
@@ -84,6 +85,7 @@
   "api -> understanding",
   "api -> verify",
   "api -> vision",
+  "api -> voice",
   "api -> workspace",
   "api -> wsgroup",
   "artifacts -> core",
@@ -133,6 +135,7 @@
   "diagrams -> core",
   "diagrams -> llm",
   "diagrams -> response_arch",
+  "diagrams -> sandbox",
   "documents -> capabilities",
   "documents -> core",
   "documents -> obs",
@@ -153,6 +156,7 @@
   "eval -> quality",
   "eval -> question_detection",
   "eval -> rag",
+  "eval -> stt",
   "eval -> technical_pipeline",
   "followup -> clarify",
   "followup -> core",
@@ -238,7 +242,15 @@
   "verify -> core",
   "verify -> documents",
   "verify -> sandbox",
-  "vision -> core"
+  "vision -> core",
+  "voice -> clarify",
+  "voice -> core",
+  "voice -> documents",
+  "voice -> live",
+  "voice -> memory",
+  "voice -> rag",
+  "voice -> sandbox",
+  "voice -> tools"
  ],
  "_reviewed_2026_07_15": {
   "core -> quality": "llm_client consults quality.stream_controller mid-stream (Phase 5 #13).",
@@ -256,5 +268,8 @@
   "chat -> quality": "chat.verify.assess_partial_sections runs quality.stream_controller per streamed section (Phase 6 #9).",
   "response_arch -> llm": "response_arch.structured wraps llm.constrained for structured/JSON outputs (Phase 6 #24)."
  },
- "_adr_diagrams": "Edges for the new diagrams package (MermaidDiagramVisualizations.md #1). api -> diagrams: routes_diagrams.py exposes the IR pipeline. diagrams -> core: config_loader only, for the mermaid_elk flag (read fail-closed). diagrams -> llm: constrained.extract_json, to coerce a planner payload offline. diagrams -> response_arch: structured.generate_structured, the ONE model seam (planner + critic) so schema-validated generation is not reimplemented. Deliberately absent: diagrams imports no chat/orchestration/agent package, so the compiler stays usable from any caller. response_arch -> diagrams: `response_arch.layer.finalize` calls the answer-path compile lane (diagrams/lane.py), so every model-written mermaid fence is recompiled from its parsed structure. The direction is deliberate: response_arch (answer shaping) depends on diagrams (the artifact compiler), never the reverse — the compiler stays usable from a route, a document generator or a test with no response-shaping context. The one reverse edge, diagrams -> response_arch, is confined to structured.generate_structured in planner/critic."
+ "_adr_diagrams": "Edges for the new diagrams package (MermaidDiagramVisualizations.md #1). api -> diagrams: routes_diagrams.py exposes the IR pipeline. diagrams -> core: config_loader only, for the mermaid_elk flag (read fail-closed). diagrams -> llm: constrained.extract_json, to coerce a planner payload offline. diagrams -> response_arch: structured.generate_structured, the ONE model seam (planner + critic) so schema-validated generation is not reimplemented. Deliberately absent: diagrams imports no chat/orchestration/agent package, so the compiler stays usable from any caller. response_arch -> diagrams: `response_arch.layer.finalize` calls the answer-path compile lane (diagrams/lane.py), so every model-written mermaid fence is recompiled from its parsed structure. The direction is deliberate: response_arch (answer shaping) depends on diagrams (the artifact compiler), never the reverse — the compiler stays usable from a route, a document generator or a test with no response-shaping context. The one reverse edge, diagrams -> response_arch, is confined to structured.generate_structured in planner/critic.",
+ "_adr_voice_edges": "The `voice` package reaches the agent stack THROUGH THE TOOL BRIDGE (app/voice/tools.py): each edge above is one thin adapter over a capability that already exists, not new intelligence. This is deliberate — it is what makes a spoken request able to reach retrieval, the sandbox, artifacts and durable memory instead of voice mode being a limited subset of chat (Requirement 8). `voice -> live` is READ-ONLY reuse of shared audio/turn-taking helpers under rule L2 (additive kwargs only); the reverse edge is forbidden. `(root) -> voice` is app/main.py installing the echo canceller into the shared AEC seam at startup — a one-line, flag-gated call that is a no-op while voice.native_aec is off.",
+ "_adr_diagrams_sandbox": "`diagrams -> sandbox` is the mermaid verify-before-render pipeline (app/diagrams/verify.py) executing its structural checker on the user's diagram INSIDE the sandbox, with the same isolation as any other generated code. Verification that actually runs the check beats verification that asserts. Note the deliberate ABSENCE of `diagrams -> api`: the repair prompt was lifted into app/diagrams/repair_contract.py so the domain package never imports a route module.",
+ "_adr_eval_stt": "`eval -> stt` is app/eval/voice_latency.py timing the real transcription stage. A latency budget assembled from estimates is worth nothing — the harness has to call the component it is measuring."
 }
