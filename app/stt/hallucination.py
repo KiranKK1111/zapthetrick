@@ -64,9 +64,24 @@ _HALLUCINATIONS = frozenset({
 
 _PUNCT = re.compile(r"[^\w\s\[\]()]+")
 
-# RMS below which a segment is treated as containing no real speech. Room tone
-# and fan noise sit well under this; even quiet speech sits above it.
-SILENCE_RMS = 0.006
+# RMS below which a segment is treated as containing no real speech.
+#
+# MEASURED, and the measurement is why this is only the SECONDARY gate. Room
+# tone spans a huge range depending on mic gain and AGC:
+#
+#     digital silence  0.0000   quiet room   0.0009
+#     typical room     0.0046   noisy/fan    0.0122
+#     AGC-boosted      0.0276   quiet speech 0.0612
+#
+# There is no single value that catches an AGC-boosted room without also eating
+# quiet speech — the two overlap. So the authoritative gate is the VAD's own
+# voiced-sample count in `app/audio/stream.py`, which is level-independent
+# because it is the same decision the segmenter already made about this audio.
+#
+# This threshold remains as a defence for callers with no VAD context, set just
+# above typical room tone. It is deliberately conservative: it will MISS a
+# hallucination in a loud room rather than risk discarding quiet speech.
+SILENCE_RMS = 0.008
 
 
 def normalise(text: str) -> str:

@@ -43,6 +43,13 @@ class _Buffers:
     end_partial_voiced: int = 0                       # end-of-speech partial marker
 
 
+# Voiced samples below which a known ASR filler phrase is treated as a
+# hallucination rather than speech. 0.35 s at 16 kHz: nobody says a whole
+# sentence in less voiced audio than that, and the VAD has already excluded
+# non-speech, so this only ever fires on a phrase invented from near-silence.
+_HALLUCINATION_VOICED_MIN = 5600
+
+
 class AudioStreamSegmenter:
     """VAD-gated segmenter that emits transcribed utterances.
 
@@ -241,6 +248,24 @@ class AudioStreamSegmenter:
             text = (text or "").strip()
             if not text or gen != self._utt_gen:
                 return
+            # ASR HALLUCINATION on near-silence. Whisper was trained on
+            # captioned video, so handed room tone it emits that corpus's most
+            # frequent closers — "Thank you.", "Thanks for watching!". A live
+            # session produced 13 of these in 22 partials.
+            #
+            # The gate is the VAD's OWN voiced-sample count, not an audio level.
+            # An absolute RMS threshold was tried and is not defensible: a noisy
+            # room or an AGC-boosted mic reads louder than quiet speech, so the
+            # threshold either misses the hallucination or eats real speech
+            # depending on hardware. `voiced_n` is what the segmenter already
+            # decided, on the same signal, independent of gain.
+            if n_samples < _HALLUCINATION_VOICED_MIN:
+                try:
+                    from app.stt.hallucination import is_hallucination_phrase
+                    if is_hallucination_phrase(text):
+                        return
+                except Exception:  # noqa: BLE001 — never break intake
+                    pass
             # Remember what this partial covered so a finalize with no newer
             # voiced audio can reuse it as the final transcript.
             self._partial_ready = (n_samples, text)

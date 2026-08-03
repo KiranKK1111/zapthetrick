@@ -134,3 +134,39 @@ def test_the_stt_entrypoints_apply_the_guard():
         "transcribe_partial was not wrapped"
     assert "_transcribe_with_confidence_raw" in src, \
         "transcribe_with_confidence was not wrapped"
+
+
+# ── The VAD gate: the one that actually holds on real hardware ──────────────
+#
+# An absolute RMS threshold was tried first and does not survive measurement.
+# Room tone spans a wide range with mic gain and AGC, and an AGC-boosted room
+# (0.028) reads LOUDER than quiet speech (0.061 is only 2x above it) — so no
+# single level catches the hallucination without risking real speech. The
+# segmenter's voiced-sample count is level-independent, because it is the same
+# decision the VAD already made about this audio.
+
+def test_the_voiced_sample_floor_is_shorter_than_any_real_sentence():
+    from app.audio.stream import _HALLUCINATION_VOICED_MIN
+    seconds = _HALLUCINATION_VOICED_MIN / SR
+    assert 0.2 <= seconds <= 0.6, (
+        f"{seconds:.2f}s — too long risks discarding a real short answer, "
+        "too short lets the artifact through")
+
+
+def test_the_segmenter_gates_partials_on_the_vad_count():
+    """A guard that lives only in the STT factory cannot see the VAD verdict.
+    The segmenter is where both facts are available at once."""
+    import inspect
+
+    from app.audio import stream
+    src = inspect.getsource(stream.AudioStreamSegmenter._maybe_spawn_partial)
+    assert "is_hallucination_phrase" in src, \
+        "partials are not checked against the artifact list"
+    assert "_HALLUCINATION_VOICED_MIN" in src, \
+        "the VAD voiced-count gate is not applied"
+
+
+def test_the_rms_threshold_sits_above_typical_room_tone():
+    """Documented as the secondary gate: conservative on purpose, so it misses
+    a hallucination in a loud room rather than eating quiet speech."""
+    assert speech_energy(room_tone()) < SILENCE_RMS < 0.02
